@@ -8,8 +8,8 @@ import torch.optim as optim
 from torch_geometric.loader import DataLoader
 from tensorboardX import SummaryWriter
 import os
-from patrickstar.runtime import initialize_engine
-from patrickstar.utils import get_rank
+#from patrickstar.runtime import initialize_engine
+#from patrickstar.utils import get_rank
 class BaseTrainingJob:
     def __init__(self, network_name, task, dataset, network_params=None, neural_tree_params=None):
         assert task == 'node' or task == 'graph'
