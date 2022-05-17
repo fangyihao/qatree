@@ -1,7 +1,7 @@
 import torch.nn as nn
 import torch_geometric.nn as pyg_nn
 from neural_tree.models.sage_former import SAGEFormer2D
-
+import torch
 def build_conv_layer(conv_block, input_dim, hidden_dim, encoder):
     """
     Build a PyTorch Geometric convolution layer given specified input and output dimension.
@@ -14,6 +14,7 @@ def build_conv_layer(conv_block, input_dim, hidden_dim, encoder):
     elif conv_block == 'GraphSAGE':
         # return pyg_nn.SAGEConv(input_dim, hidden_dim, normalize=False, bias=True)
         # return SAGEFormer(input_dim, hidden_dim, normalize=False, bias=True)
+        #device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         return SAGEFormer2D(encoder, normalize=False, bias=True)
     else:
         return NotImplemented

@@ -17,6 +17,8 @@ from transformers.models.roberta.modeling_roberta import RobertaLayer
 from transformers import AutoConfig
 from torch import nn
 from transformers import RobertaModel
+import torch
+from neural_tree.models.prefix_encoder import PrefixEncoder
 
 class SAGEFormer(MessagePassing):
     r"""The GraphSAGE operator from the `"Inductive Representation Learning on
@@ -144,9 +146,42 @@ class SAGEFormer2D(MessagePassing):
         kwargs.setdefault('aggr', 'mean')
         super().__init__(**kwargs)
         
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        
         self.encoder = encoder
+        #self.encoder.to(device)
 
         self.normalize = normalize
+        
+        self.pre_seq_len = self.encoder.config.pre_seq_len
+        self.n_layer = self.encoder.config.num_hidden_layers
+        self.n_head = self.encoder.config.num_attention_heads
+        self.n_embd = self.encoder.config.hidden_size // self.encoder.config.num_attention_heads
+        
+        self.prefix_tokens = torch.arange(self.pre_seq_len).long()
+        self.prefix_tokens.to(device)
+        
+        self.prefix_encoder = PrefixEncoder(self.encoder.config)
+        self.prefix_encoder.to(device)
+        
+        self.dropout = torch.nn.Dropout(self.encoder.config.hidden_dropout_prob)
+        #self.dropout.to(device)
+        
+    def create_prefix(self, batch_size):
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        
+        prefix_tokens = self.prefix_tokens.unsqueeze(0).expand(batch_size, -1).to(device)
+        past_key_values = self.prefix_encoder(prefix_tokens)
+        past_key_values = past_key_values.view(
+            batch_size,
+            self.pre_seq_len,
+            self.n_layer * 2, 
+            self.n_head,
+            self.n_embd
+        )
+        past_key_values = self.dropout(past_key_values)
+        past_key_values = past_key_values.permute([2, 0, 3, 1, 4]).split(2)
+        return past_key_values
 
 
     def forward(self, x: Tensor, edge_index: Adj,
@@ -156,10 +191,20 @@ class SAGEFormer2D(MessagePassing):
         #print("edge_index.size():", edge_index.size())
         #print("x.size():", x.size())
         
+        #x.to(torch.device("cpu"))
+        #self.encoder.embeddings.to(torch.device("cpu"))
         out = self.propagate(edge_index, x=x.view(x.size(0), -1), size=size)
+        #self.encoder.embeddings.to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
+        #out.to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
+        
         #print("out.size():", out.size())
         out = out.view(-1, *x.size()[1:])
-        out = self.encoder.encoder(out, head_mask = [None]*len(self.encoder.encoder.layer))[0]
+        
+        batch_size = out.shape[0]
+        past_key_values = self.create_prefix(batch_size=batch_size)
+        
+        out = self.encoder.encoder(out, head_mask = [None]*len(self.encoder.encoder.layer), past_key_values=past_key_values)[0]
+        
 
         if self.normalize:
             out = F.normalize(out, p=2., dim=-1)

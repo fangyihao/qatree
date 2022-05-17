@@ -18,6 +18,13 @@ class PrefixNeuralTreeNetwork(BasicNetwork):
          classification).
         """
         encoder = RobertaModel.from_pretrained("roberta-base")
+        
+        for param in encoder.parameters():
+            param.requires_grad = False
+            
+        encoder.config.prefix_projection = False
+        encoder.config.pre_seq_len = 4
+        
         #encoder = MobileBertModel.from_pretrained("google/mobilebert-uncased")
         super(PrefixNeuralTreeNetwork, self).__init__(None, None, task, conv_block, None, num_layers,
                                                 None, GAT_heads, GAT_concats, dropout, encoder = encoder)

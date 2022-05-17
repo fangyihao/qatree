@@ -91,7 +91,7 @@ def main(args):
         test_node_ratio = 0.2
     network_params = {'conv_block': 'GraphSAGE',
                       'hidden_dim': 128,
-                      'num_layers': 2,
+                      'num_layers': 1,
                       'GAT_hidden_dims': [128, 128],
                       'GAT_heads': [6, 1],
                       'GAT_concats': [True, False],

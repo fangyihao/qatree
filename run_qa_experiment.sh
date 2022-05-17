@@ -20,7 +20,7 @@ gnndim=256
 
 # Existing arguments but changed for PrefixFusion
 encoder_layer=-1
-max_node_num=32
+max_node_num=16
 seed=5
 lr_schedule=fixed
 psl=32
@@ -36,7 +36,7 @@ else
   ie_dim=400
 fi
 
-max_seq_len=64
+max_seq_len=48
 ent_emb=tzw
 
 # Added for PrefixFusion

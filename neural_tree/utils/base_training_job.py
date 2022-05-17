@@ -242,7 +242,7 @@ class BaseTrainingJob:
             early_stop_step += 1
             total_loss = 0.
             self.__net.train()
-            for batch in train_loader:
+            for i, batch in enumerate(train_loader):
                 opt.zero_grad()
 
                 pred = self.__net(batch.to(device))
@@ -263,10 +263,13 @@ class BaseTrainingJob:
                 #self.__net.backward(loss)
                 opt.step()
                 
-                print("loss:", loss.item())
+                if i % 100 == 0:
+                    print('loss:', loss.item(), 'batch:', i)
 
                 total_loss += loss.item() * batch.num_graphs
             total_loss /= len(train_loader.dataset)
+            
+            print('loss:', total_loss, 'epoch:', epoch)
             writer.add_scalar('loss', total_loss, epoch)
 
             writer.add_scalar('lr', opt.param_groups[0]["lr"], epoch)
