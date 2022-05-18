@@ -91,7 +91,7 @@ def main(args):
         test_node_ratio = 0.2
     network_params = {'conv_block': 'GraphSAGE',
                       'hidden_dim': 128,
-                      'num_layers': 2,
+                      'num_layers': 1,
                       'GAT_hidden_dims': [128, 128],
                       'GAT_heads': [6, 1],
                       'GAT_concats': [True, False],
@@ -99,7 +99,7 @@ def main(args):
     optimization_params = {'lr': 0.001,
                            'num_epochs': 1000,
                            'weight_decay': 0.001}
-    dataset_params = {'batch_size': 1,
+    dataset_params = {'batch_size': 2,
                       'shuffle': False}
     neural_tree_params = {'min_diameter': 1,      # diameter=0 means the H-tree is disconnected
                           'max_diameter': None,
