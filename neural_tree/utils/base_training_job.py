@@ -1,4 +1,4 @@
-from neural_tree.models import BasicNetwork, PrefixNeuralTreeNetwork
+from neural_tree.models import BasicNetwork, get_neural_tree_network
 from neural_tree.h_tree import convert_dataset_to_junction_tree_hierarchy, HTreeDataset
 import sys
 import time
@@ -8,10 +8,20 @@ import torch.optim as optim
 from torch_geometric.loader import DataLoader
 from tensorboardX import SummaryWriter
 import os
+from transformers import AutoConfig
+from transformers.models.roberta.modeling_roberta import RobertaModel
+#from torch.distributed.fsdp import (
+#   FullyShardedDataParallel,
+#   CPUOffload,
+#)
+#from torch.distributed.fsdp.wrap import (
+#   default_auto_wrap_policy,
+#)
+#from torch.nn.parallel import DistributedDataParallel as DDP
 #from patrickstar.runtime import initialize_engine
 #from patrickstar.utils import get_rank
 class BaseTrainingJob:
-    def __init__(self, network_name, task, dataset, network_params=None, neural_tree_params=None):
+    def __init__(self, network_name, task, dataset, network_params=None, neural_tree_params=None, dataset_params=None):
         assert task == 'node' or task == 'graph'
         assert network_name == 'original' or 'neural_tree'
         self.__network_name = network_name
@@ -23,6 +33,7 @@ class BaseTrainingJob:
                 raise RuntimeError('No node feature')
         self.__training_params = self.create_default_params(network_name)
         self.update_training_params(network_params=network_params)
+        self.update_training_params(dataset_params=dataset_params)
         if task == "node":
             self.update_training_params(network_params={'input_dim': dataset.num_node_features,
                                                     'output_dim': dataset.num_classes})
@@ -55,9 +66,15 @@ class BaseTrainingJob:
             else:
                 # print('Received {} graphs for {} classification.'.format(len(dataset),self.__task))
                 tic = time.perf_counter()
-                jth_file = "data/jth.pt"
-                if os.path.isfile(jth_file):
-                    self.__dataset = torch.load(jth_file)
+                jth_file = "jth_{}_n{}_sl{}_tw{}.pt".format(self.__training_params['network_params']['aggr_encoder'], 
+                                                                 self.__training_params['dataset_params']['max_node_num'],
+                                                                 self.__training_params['dataset_params']['seq_len'],
+                                                                 self.__training_params['dataset_params']['tree_width'])
+                jth_path = "data/{}".format(jth_file)
+                if os.path.isfile('{}.zip'.format(jth_path)):
+                    os.system('unzip {}.zip -d data'.format(jth_path))
+                    self.__dataset = torch.load(jth_path)
+                    os.system('rm {}'.format(jth_path))
                     '''
                     new_dataset = [[],[],[]]
                     for j, sub_dataset in enumerate(self.__dataset):
@@ -70,8 +87,11 @@ class BaseTrainingJob:
                     self.__dataset = convert_dataset_to_junction_tree_hierarchy(dataset, self.__task,
                                                                                 min_diameter=min_diameter,
                                                                                 max_diameter=max_diameter,
-                                                                                radius=radius)
-                    torch.save(self.__dataset, jth_file)
+                                                                                radius=radius, 
+                                                                                treewidth=self.__training_params['dataset_params']['tree_width'])
+                    torch.save(self.__dataset, jth_path)
+                    os.system('cd data && zip -m {}.zip {}'.format(jth_file, jth_file))
+                    #os.system('rm {}'.format(jth_file))
                 toc = time.perf_counter()
                 print('Done computing junction tree hierarchies (time elapsed: {:.4f} s). '.format(toc - tic))
             print('After diameter filtering, got {} graphs for training, {} for validation, {} for testing.' \
@@ -149,12 +169,51 @@ class BaseTrainingJob:
         if self.__network_name == 'original':
             return BasicNetwork(task=self.__task, **self.__training_params['network_params'])
         if self.__network_name == 'neural_tree':
-            return PrefixNeuralTreeNetwork(task=self.__task, **self.__training_params['network_params'])
+            #model_name_or_path = "roberta-large"
+            #model_name_or_path = "roberta-base"
+            model_name_or_path = self.__training_params['network_params']['aggr_encoder']
+            #model_name_or_path = "bert-base-uncased"
+            config = AutoConfig.from_pretrained(
+                model_name_or_path,#"bert-base-uncased", #args.model_name_or_path
+                revision="main"
+                )
+            
+            config.prefix_tuning = self.__training_params['network_params']['prefix_tuning']
+            config.prefix_projection = self.__training_params['network_params']['prefix_projection']
+            config.prefix_hidden_size = self.__training_params['network_params']['prefix_hidden_size']
+            config.seq_len = self.__training_params['dataset_params']['seq_len']
+            config.pre_seq_len = self.__training_params['network_params']['pre_seq_len']
+            config.num_choices = self.__training_params['dataset_params']['num_choices']
+            config.first_attn_mask_layers = config.num_hidden_layers // 2
+            config.graph_pooling = "context"
+            config.aggr = "cat" # "cat" or "mean"
+            
+            print(config)
+            
+            cls = get_neural_tree_network(config)
+            
+            return cls.from_pretrained(
+                model_name_or_path,#"bert-base-uncased", 
+                config = config,
+                task = self.__task, 
+                conv_block = self.__training_params['network_params']['conv_block']
+            )
+            #return PrefixNeuralTreeNetwork(config=config,task=self.__task, **self.__training_params['network_params'])
         else:
             raise RuntimeError('Unknown network name.')
 
     def get_dataset(self):
         return self.__dataset
+    
+    def count_parameters(self, model):
+        num_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        num_fixed_params = sum(p.numel() for p in model.parameters() if not p.requires_grad)
+    
+        print('num_trainable_params:', num_trainable_params)
+        print('num_fixed_params:', num_fixed_params)
+    
+        print('num_total_params:', num_trainable_params + num_fixed_params)
+
 
     def train(self, log_folder, optimization_params=None, dataset_params=None, decay_epochs=100, decay_rate=1.0,
               early_stop_window=-1, verbose=False):
@@ -164,40 +223,60 @@ class BaseTrainingJob:
         # move training to gpu if available
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.__net.to(device)
+        
+        
+        '''
+        n_gpus = torch.cuda.device_count()
+        assert n_gpus >= 2, f"Requires at least 2 GPUs to run, but got {n_gpus}"
+        world_size = n_gpus
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '12355'
+        # initialize the process group
+        import torch.distributed as dist
+        dist.init_process_group("gloo", rank=0, world_size=world_size)
+        self.__net = DDP(self.__net)
+        self.__net = FullyShardedDataParallel(
+           self.__net,
+           fsdp_auto_wrap_policy=default_auto_wrap_policy,
+           cpu_offload=CPUOffload(offload_params=True),
+        )
+        '''
+        
         # create data loader
         if self.__task == 'node':
             if self.__network_name == 'neural_tree':
                 train_loader = DataLoader(self.__dataset[0],
-                                          batch_size=self.__training_params['dataset_params']['batch_size'],
+                                          batch_size=self.__training_params['dataset_params']['mini_batch_size'],
                                           shuffle=self.__training_params['dataset_params']['shuffle'])
                 val_loader = DataLoader(self.__dataset[1],
-                                        batch_size=self.__training_params['dataset_params']['batch_size'],
+                                        batch_size=self.__training_params['dataset_params']['mini_batch_size'],
                                         shuffle=self.__training_params['dataset_params']['shuffle'])
                 test_loader = DataLoader(self.__dataset[2],
-                                         batch_size=self.__training_params['dataset_params']['batch_size'],
+                                         batch_size=self.__training_params['dataset_params']['mini_batch_size'],
                                          shuffle=self.__training_params['dataset_params']['shuffle'])
             else:
                 train_loader = val_loader = test_loader = \
-                    DataLoader(self.__dataset, batch_size=self.__training_params['dataset_params']['batch_size'],
+                    DataLoader(self.__dataset, batch_size=self.__training_params['dataset_params']['mini_batch_size'],
                                shuffle=self.__training_params['dataset_params']['shuffle'])
         else:  # self.__task == 'graph'
             if self.__network_name == 'neural_tree':
                 train_loader = DataLoader(self.__dataset[0],
-                                          batch_size=self.__training_params['dataset_params']['batch_size'],
+                                          batch_size=self.__training_params['dataset_params']['mini_batch_size'],
                                           shuffle=self.__training_params['dataset_params']['shuffle'])
                 val_loader = DataLoader(self.__dataset[1],
-                                        batch_size=self.__training_params['dataset_params']['batch_size'],
+                                        batch_size=self.__training_params['dataset_params']['mini_batch_size'],
                                         shuffle=self.__training_params['dataset_params']['shuffle'])
                 test_loader = DataLoader(self.__dataset[2],
-                                         batch_size=self.__training_params['dataset_params']['batch_size'],
+                                         batch_size=self.__training_params['dataset_params']['mini_batch_size'],
                                          shuffle=self.__training_params['dataset_params']['shuffle'])
             else:
                 raise RuntimeError("Not implemented")
 
+        print("lr:",self.__training_params['optimization_params']['lr'])
         opt = optim.Adam(self.__net.parameters(), lr=self.__training_params['optimization_params']['lr'],
                          weight_decay=self.__training_params['optimization_params']['weight_decay'])
 
-        my_lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer=opt, step_size=decay_epochs, gamma=decay_rate)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer=opt, step_size=decay_epochs, gamma=decay_rate)
 
         '''
         config = {
@@ -228,6 +307,9 @@ class BaseTrainingJob:
         
         self.__net, opt = initialize_engine(model_func=lambda: self.__net, local_rank=get_rank(), config=config)
         '''
+        
+        self.count_parameters(self.__net)
+        
         # train
         max_val_acc = 0
         max_test_acc = 0  # If val_loader is not None, compute using the model weights that lead to best_val_acc
@@ -242,9 +324,12 @@ class BaseTrainingJob:
             early_stop_step += 1
             total_loss = 0.
             self.__net.train()
+            
+            num_batches = len(train_loader)
+            opt.zero_grad()
             for i, batch in enumerate(train_loader):
-                opt.zero_grad()
-
+                #opt.zero_grad()
+                
                 pred = self.__net(batch.to(device))
                 label = batch.y
                 if self.__task == 'node' and self.__network_name == 'original':
@@ -261,10 +346,15 @@ class BaseTrainingJob:
 
                 loss.backward()
                 #self.__net.backward(loss)
-                opt.step()
                 
-                if i % 100 == 0:
-                    print('loss:', loss.item(), 'batch:', i)
+                #print("multiplier:", (self.__training_params['dataset_params']['batch_size']//self.__training_params['dataset_params']['mini_batch_size']))
+                
+                if i % (self.__training_params['dataset_params']['batch_size']//self.__training_params['dataset_params']['mini_batch_size']) == 0 or i == num_batches - 1:
+                    opt.step()
+                    opt.zero_grad()
+                
+                #if i % 100 == 0:
+                #    print('loss:', loss.item(), 'batch:', i)
 
                 total_loss += loss.item() * batch.num_graphs
             total_loss /= len(train_loader.dataset)
@@ -273,7 +363,7 @@ class BaseTrainingJob:
             writer.add_scalar('loss', total_loss, epoch)
 
             writer.add_scalar('lr', opt.param_groups[0]["lr"], epoch)
-            my_lr_scheduler.step()
+            scheduler.step()
 
             if verbose:
                 train_result = self.test(train_loader, is_train=True)
@@ -282,6 +372,7 @@ class BaseTrainingJob:
             # validation and testing
             if val_loader is not None:
                 val_result = self.test(val_loader, is_validation=True)
+                print('validation result:', val_result, 'epoch:', epoch)
                 writer.add_scalar('validation result', val_result, epoch)
                 if val_result > max_val_acc:
                     max_val_acc = val_result
@@ -296,6 +387,7 @@ class BaseTrainingJob:
                     break
             else:
                 test_result = self.test(test_loader)
+                print('test result:', test_result, 'epoch:', epoch)
                 writer.add_scalar('test result', test_result, epoch)
                 if test_result > max_test_acc:
                     max_test_acc = test_result

@@ -154,12 +154,10 @@ class DataLoader(object):
     def __init__(self, train_statement_path, train_adj_path,
                  dev_statement_path, dev_adj_path,
                  test_statement_path, test_adj_path,
-                 batch_size, eval_batch_size, device, model_name, max_node_num=200, max_seq_length=128,
+                 device, model_name, max_node_num=200, max_seq_length=128,
                  is_inhouse=False, inhouse_train_qids_path=None,
                  subsample=1.0, n_train=-1, debug=False, cxt_node_connects_all=False, kg="cpnet"):
         super().__init__()
-        self.batch_size = batch_size
-        self.eval_batch_size = eval_batch_size
         self.device0, self.device1 = device
         self.is_inhouse = is_inhouse
         self.debug = debug

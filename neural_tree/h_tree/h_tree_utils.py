@@ -136,7 +136,7 @@ def from_networkx(G, group_node_attrs: Optional[Union[List[str], all]] = None,
     return data
 
 
-def convert_to_networkx_jth(data: Data, task='graph', node_id=None, radius=None, node_attrs=None, edge_attrs=None):
+def convert_to_networkx_jth(data: Data, task='graph', node_id=None, radius=None, node_attrs=None, edge_attrs=None, treewidth = 1):
     """
     Convert a graph or its subgraph given id and radius (an ego graph) to junction tree hierarchy. The node features in
     the input graph will be copied to the corresponding leaf nodes of the output tree decomposition.
@@ -202,7 +202,7 @@ def convert_to_networkx_jth(data: Data, task='graph', node_id=None, radius=None,
     
     #G_jth, root_nodes = generate_jth(G, zero_feature=attr_feature_dict)
     
-    treewidth = 1
+    
     need_root_tree = True
     remove_edges_every_layer = True
     G_sampled, G_jth, root_nodes = sample_and_generate_jth(G, k=treewidth, zero_feature=attr_feature_dict,
@@ -270,7 +270,7 @@ def batch_edge_index(edge_index_init, n_nodes):
     edge_index = torch.cat(edge_index, dim=1) #[2, total_E]
     return edge_index
 
-def convert_knowledge_graph_to_jths(data, min_diameter=None, max_diameter=None):
+def convert_knowledge_graph_to_jths(data, min_diameter=None, max_diameter=None, treewidth = 1):
     
 
     #print("len(data):", len(data))
@@ -294,13 +294,16 @@ def convert_knowledge_graph_to_jths(data, min_diameter=None, max_diameter=None):
         print("edge_type:", edge_type.size())
         '''
         adj_lengths = adj_lengths.cpu().numpy()
+        
+        node_context_mask = torch.zeros(node_input_ids.size(0), dtype=torch.bool)
+        node_context_mask[0] = True
     
         data = Data(x = node_input_ids[:adj_lengths,:], edge_index = edge_index, 
-             node_type = node_type_ids[:adj_lengths], edge_type = edge_type, node_attention_mask = node_attention_mask[:adj_lengths,:], node_token_type_ids = node_token_type_ids[:adj_lengths,:], node_output_mask = node_output_mask[:adj_lengths,:],  node_scores = node_scores[:adj_lengths,:])
+             node_type = node_type_ids[:adj_lengths], edge_type = edge_type, node_attention_mask = node_attention_mask[:adj_lengths,:], node_token_type_ids = node_token_type_ids[:adj_lengths,:], node_output_mask = node_output_mask[:adj_lengths,:],  node_scores = node_scores[:adj_lengths,:], node_context_mask=node_context_mask[:adj_lengths])
 
         print("data:", data)
 
-        data_jth, G_jth, root_nodes = convert_to_networkx_jth(data, 'graph', 0, None, node_attrs=["x", "node_type", "node_attention_mask", "node_token_type_ids", "node_output_mask", "node_scores"], edge_attrs=["edge_type"])
+        data_jth, G_jth, root_nodes = convert_to_networkx_jth(data, 'graph', 0, None, node_attrs=["x", "node_type", "node_attention_mask", "node_token_type_ids", "node_output_mask", "node_scores", "node_context_mask"], edge_attrs=["edge_type"], treewidth=treewidth)
     
         
         # return empty lists if diameter is beyond specified bound
@@ -405,7 +408,7 @@ def convert_room_object_graph_to_same_jths(data: Data, min_diameter=None, max_di
     return train_list, val_list, test_list
 
 
-def convert_dataset_to_junction_tree_hierarchy(dataset, task, min_diameter=None, max_diameter=None, radius=None):
+def convert_dataset_to_junction_tree_hierarchy(dataset, task, min_diameter=None, max_diameter=None, radius=None, treewidth=1):
     """
     Convert a torch.dataset object or a list of torch.Data to a junction tree hierarchies.
     :param dataset:     a iterable collection of torch.Data objects
@@ -426,7 +429,7 @@ def convert_dataset_to_junction_tree_hierarchy(dataset, task, min_diameter=None,
             with concurrent.futures.ThreadPoolExecutor(max_workers=cpu_count+4) as executor:
                 for sub_dataset in dataset:
                     print("dataset size:", len(sub_dataset))
-                    graph_list = list(executor.map(lambda data: convert_knowledge_graph_to_jths(data, min_diameter, max_diameter), list(sub_dataset)))
+                    graph_list = list(executor.map(lambda data: convert_knowledge_graph_to_jths(data, min_diameter, max_diameter, treewidth), list(sub_dataset)))
                     rtn_list.append(graph_list)   
             '''
             # Sequential alternative for debug

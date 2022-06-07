@@ -18,10 +18,12 @@ class PrefixEncoder(torch.nn.Module):
             self.trans = torch.nn.Sequential(
                 torch.nn.Linear(config.hidden_size, config.prefix_hidden_size),
                 torch.nn.Tanh(),
-                torch.nn.Linear(config.prefix_hidden_size, config.num_hidden_layers * 2 * config.hidden_size)
+                #torch.nn.Linear(config.prefix_hidden_size, config.num_hidden_layers * 2 * config.hidden_size)
+                torch.nn.Linear(config.prefix_hidden_size, 2 * config.hidden_size)
             )
         else:
-            self.embedding = torch.nn.Embedding(config.pre_seq_len, config.num_hidden_layers * 2 * config.hidden_size)
+            #self.embedding = torch.nn.Embedding(config.pre_seq_len, config.num_hidden_layers * 2 * config.hidden_size)
+            self.embedding = torch.nn.Embedding(config.pre_seq_len, 2 * config.hidden_size)
 
     def forward(self, prefix: torch.Tensor):
         if self.prefix_projection:

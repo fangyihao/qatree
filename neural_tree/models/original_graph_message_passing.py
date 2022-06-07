@@ -1,4 +1,4 @@
-from neural_tree.models.utils import build_conv_layer, build_GAT_conv_layers
+from neural_tree.models.utils import build_conv_layer, build_GAT_conv_layers, build_GraphSAGE_conv_layers
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn.norm.batch_norm import BatchNorm
@@ -39,23 +39,26 @@ class BasicNetwork(nn.Module):
 
         # message passing
         self.convs = nn.ModuleList()
-        if self.conv_block != 'GAT':  # GAT dimensions are different than others
-            self.convs.append(build_conv_layer(self.conv_block, input_dim, hidden_dim, kwargs["encoder"]))
-            if self.need_postmp:
-                for _ in range(1, self.num_layers):
-                    self.convs.append(build_conv_layer(self.conv_block, hidden_dim, hidden_dim, kwargs["encoder"]))
-            else:
-                for _ in range(1, self.num_layers - 1):
-                    self.convs.append(build_conv_layer(self.conv_block, hidden_dim, hidden_dim, kwargs["encoder"]))
-                self.convs.append(build_conv_layer(self.conv_block, hidden_dim, output_dim, kwargs["encoder"]))
-
-        else:
+        if self.conv_block == 'GAT':  # GAT dimensions are different than others
             if self.need_postmp:
                 self.convs = build_GAT_conv_layers(input_dim, GAT_hidden_dims, GAT_heads, GAT_concats,
                                                    dropout=dropout)
             else:
                 self.convs = build_GAT_conv_layers(input_dim, GAT_hidden_dims + [output_dim], GAT_heads,
                                                    GAT_concats, dropout=dropout)
+        elif self.conv_block == 'GraphSAGE':
+            self.convs = build_GraphSAGE_conv_layers(kwargs["encoder"])
+        else:
+            self.convs.append(build_conv_layer(self.conv_block, input_dim, hidden_dim))
+            if self.need_postmp:
+                for _ in range(1, self.num_layers):
+                    self.convs.append(build_conv_layer(self.conv_block, hidden_dim, hidden_dim))
+            else:
+                for _ in range(1, self.num_layers - 1):
+                    self.convs.append(build_conv_layer(self.conv_block, hidden_dim, hidden_dim))
+                self.convs.append(build_conv_layer(self.conv_block, hidden_dim, output_dim))
+
+            
 
         # batch normalization
         if self.conv_block == 'GIN':

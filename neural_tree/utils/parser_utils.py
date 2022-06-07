@@ -71,8 +71,6 @@ def add_data_arguments(parser):
 
 def add_encoder_arguments(parser):
     parser.add_argument('-enc', '--encoder', default='bert-large-uncased', help='encoder type')
-    parser.add_argument('--encoder_layer', default=-1, type=int, help='encoder layer ID to use as features (used only by non-LSTM encoders)')
-    parser.add_argument('-elr', '--encoder_lr', default=2e-5, type=float, help='learning rate')
     args, _ = parser.parse_known_args()
     parser.set_defaults(encoder_lr=ENCODER_DEFAULT_LR[args.dataset].get(args.encoder, ENCODER_DEFAULT_LR['default']))
 

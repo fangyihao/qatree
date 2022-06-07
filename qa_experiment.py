@@ -48,7 +48,6 @@ def load_data(args, devices, kg):
     dataset = data_utils.DataLoader(args.train_statements, args.train_adj,
         args.dev_statements, args.dev_adj,
         args.test_statements, args.test_adj,
-        batch_size=args.batch_size, eval_batch_size=args.eval_batch_size,
         device=devices,
         model_name=args.encoder,
         max_node_num=args.max_node_num, max_seq_length=args.max_seq_len,
@@ -66,12 +65,18 @@ def main(args):
     if args.dataset == "medqa_usmle":
         kg = "ddb"
         
-    csqa_file = "data/csqa.pt"
-    if os.path.isfile(csqa_file):
-        dataset = torch.load(csqa_file)
+    
+    csqa_file = "csqa_{}_n{}_sl{}_tw{}.pt".format(args.encoder, args.max_node_num, args.max_seq_len, args.tree_width)
+    csqa_path = "data/{}".format(csqa_file)
+    if os.path.isfile('{}.zip'.format(csqa_path)):
+        os.system('unzip {}.zip -d data'.format(csqa_path))
+        dataset = torch.load(csqa_path)
+        os.system('rm {}'.format(csqa_path))
     else:
         dataset = load_data(args, devices, kg)
-        torch.save(dataset, csqa_file)
+        torch.save(dataset, csqa_path)
+        os.system('cd data && zip -m {}.zip {} '.format(csqa_file, csqa_file))
+        #os.system('rm {}'.format(csqa_path))
     task = 'graph'
     
     ############## run control #########################################
@@ -89,18 +94,23 @@ def main(args):
         train_node_ratio = 0.7
         val_node_ratio = 0.1
         test_node_ratio = 0.2
-    network_params = {'conv_block': 'GraphSAGE',
-                      'hidden_dim': 128,
-                      'num_layers': 1,
-                      'GAT_hidden_dims': [128, 128],
-                      'GAT_heads': [6, 1],
-                      'GAT_concats': [True, False],
-                      'dropout': 0.25}
-    optimization_params = {'lr': 0.001,
+    network_params = {'aggr_encoder':args.encoder,
+                      'conv_block': 'GraphSAGE',
+                      'dropout': 0.25, 
+                      'pre_seq_len':args.pre_seq_len, 
+                      'prefix_tuning': args.prefix_tuning, 
+                      'prefix_projection': args.prefix_projection, 
+                      'prefix_hidden_size': args.prefix_hidden_size}
+    optimization_params = {'lr': args.learning_rate,
                            'num_epochs': 1000,
                            'weight_decay': 0.001}
-    dataset_params = {'batch_size': 2,
-                      'shuffle': False}
+    dataset_params = {'mini_batch_size': args.mini_batch_size,
+                      'batch_size': args.batch_size,
+                      'shuffle': True,
+                      'num_choices': args.num_choices,
+                      'seq_len':args.max_seq_len,
+                      'max_node_num':args.max_node_num, 
+                      'tree_width':args.tree_width}
     neural_tree_params = {'min_diameter': 1,      # diameter=0 means the H-tree is disconnected
                           'max_diameter': None,
                           'sub_graph_radius': None}
@@ -108,7 +118,13 @@ def main(args):
     #####################################################################
 
 
-    random.seed(0)
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available() and args.cuda:
+        torch.cuda.manual_seed(args.seed)
+
+    #random.seed(0)
 
     # setup log folder, parameter and accuracy files
     log_folder = log_folder_master + datetime.now().strftime('/%Y%m%d-%H%M%S')
@@ -135,7 +151,7 @@ def main(args):
                                     test_node_ratio=test_node_ratio)
 
         # training
-        train_job = BaseTrainingJob(algorithm, task, dataset, network_params, neural_tree_params)
+        train_job = BaseTrainingJob(algorithm, task, dataset, network_params, neural_tree_params, dataset_params)
         model, best_acc = train_job.train(log_folder + '/' + str(i), optimization_params, dataset_params,
                                           early_stop_window=early_stop_window, verbose=verbose)
 
@@ -187,21 +203,14 @@ if __name__ == '__main__':
     parser.add_argument('--max_node_num', default=200, type=int, help="Max number of nodes / the threshold used to prune nodes.")
     parser.add_argument('--subsample', default=1.0, type=float, help="The ratio to subsample the training set.")
     parser.add_argument('--n_train', default=-1, type=int, help="Number of training examples to use. Setting it to -1 means using the `subsample` argument to determine the training set size instead; otherwise it will override the `subsample` argument.")
-
-    # Model architecture
-    parser.add_argument('-k', '--k', default=5, type=int, help='The number of GreaseLM layers')
-    parser.add_argument('--att_head_num', default=2, type=int, help='number of attention heads of the final graph nodes\' pooling')
-    parser.add_argument('--gnn_dim', default=256, type=int, help='dimension of the GNN layers')
-    parser.add_argument('--fc_dim', default=200, type=int, help='number of FC hidden units (except for the MInt operators)')
-    parser.add_argument('--fc_layer_num', default=0, type=int, help='number of hidden layers of the final MLP')
-    parser.add_argument('--freeze_ent_emb', default=True, type=utils.bool_flag, nargs='?', const=True, help='Whether to freeze the entity embedding layer.')
-    parser.add_argument('--ie_dim', default=200, type=int, help='number of the hidden units of the MInt operator.')
-    parser.add_argument('--info_exchange', default=True, choices=[True, False, "every-other-layer"], type=utils.bool_str_flag, help="Whether we have the MInt operator in every GreaseLM layer or every other GreaseLM layer or not at all.")
-    parser.add_argument('--ie_layer_num', default=1, type=int, help='number of hidden layers in the MInt operator')
-    parser.add_argument("--sep_ie_layers", default=False, type=utils.bool_flag, help="Whether to share parameters across the MInt ops across differernt GreaseLM layers or not. Setting it to `False` means sharing.")
-    parser.add_argument('--random_ent_emb', default=False, type=utils.bool_flag, nargs='?', const=True, help='Whether to use randomly initialized learnable entity embeddings or not.')
+    parser.add_argument('--num_choices', default=5, type=int, help="Number of choices")
+    parser.add_argument('--tree_width', default=1, type=int, help="Tree width")
     parser.add_argument("--cxt_node_connects_all", default=False, type=utils.bool_flag, help="Whether to connect the interaction node to all the retrieved KG nodes or only the linked nodes.")
 
+    # Model architecture
+    parser.add_argument('--freeze_ent_emb', default=True, type=utils.bool_flag, nargs='?', const=True, help='Whether to freeze the entity embedding layer.')
+    parser.add_argument('--random_ent_emb', default=False, type=utils.bool_flag, nargs='?', const=True, help='Whether to use randomly initialized learnable entity embeddings or not.')
+    
     parser.add_argument('--n_ntype', default=4, type=int, help='number of node types')
     parser.add_argument('--n_etype', default=38, type=int, help='number of edge types')
 
@@ -211,9 +220,8 @@ if __name__ == '__main__':
     parser.add_argument('--dropoutf', type=float, default=0.2, help='dropout for fully-connected layers')
 
     # Optimization
-    parser.add_argument('-dlr', '--decoder_lr', default=DECODER_DEFAULT_LR[args.dataset], type=float, help='Learning rate of parameters not in LM')
+    parser.add_argument('-lr', '--learning_rate', default=DECODER_DEFAULT_LR[args.dataset], type=float, help='Learning rate of parameters not in LM')
     parser.add_argument('-mbs', '--mini_batch_size', default=1, type=int)
-    parser.add_argument('-ebs', '--eval_batch_size', default=2, type=int)
     parser.add_argument('--unfreeze_epoch', default=4, type=int, help="Number of the first few epochs in which LM’s parameters are kept frozen.")
     parser.add_argument('--refreeze_epoch', default=10000, type=int)
     parser.add_argument('--init_range', default=0.02, type=float, help='stddev when initializing with normal distribution')
@@ -226,8 +234,7 @@ if __name__ == '__main__':
     parser.add_argument("--use_fast_tokenizer", default=True, type=bool, help="Whether to use one of the fast tokenizer (backed by the tokenizers library) or not.")
     parser.add_argument("--model_revision", default="main", type=str, help="The specific model version to use (can be a branch name, tag name or commit id).")
     parser.add_argument("--use_auth_token", default=False, type=bool, help="Will use the token generated when running `transformers-cli login` (necessary to use this script with private models).")
-    parser.add_argument("--prefix", default=False, type=bool, help="Will use P-tuning v2 during training")
-    parser.add_argument("--prompt", default=False, type=bool, help="Will use prompt tuning during training")
+    parser.add_argument("--prefix_tuning", default=False, type=bool, help="Will use P-tuning v2 during training")
     parser.add_argument("--pre_seq_len", default=128, type=int, help="The length of prompt")
     parser.add_argument("--prefix_projection", default=False, type=bool, help="Apply a two-layer MLP head over the prefix embeddings")
     parser.add_argument("--prefix_hidden_size", default=256, type=int, help="The hidden size of the MLP projection head in Prefix Encoder if prefix projection is used")
