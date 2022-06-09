@@ -144,7 +144,7 @@ class SAGEFormer(MessagePassing):
 
 class SAGEFormer2D(MessagePassing):
     
-    def __init__(self, config, normalize: bool = False, **kwargs):
+    def __init__(self, config, normalize: bool = False, non_prefix_requires_grad:bool = False, **kwargs):
         kwargs.setdefault('aggr', 'mean')
         
         super().__init__(**kwargs)
@@ -164,7 +164,7 @@ class SAGEFormer2D(MessagePassing):
         
         if config.prefix_tuning == True:
             for param in self.layer_module.parameters():
-                param.requires_grad = False
+                param.requires_grad = non_prefix_requires_grad
         
         self.normalize = normalize
         
@@ -230,7 +230,7 @@ class SAGEFormer2D(MessagePassing):
             #print("attention_mask:", attention_mask.size(), attention_mask.cpu().numpy())
             if self.config.aggr == "cat":
                 #attention_mask = F.pad(attention_mask, (0,out.size(-2) - attention_mask.size(-1)), "constant", -0.)
-                attention_mask = self.propagate(edge_index, x=attention_mask, edge_weight=edge_weight, size=size)
+                attention_mask = self.propagate(edge_index, x=attention_mask, edge_weight=edge_weight, size=size, pad_value = 1.0)
             
             if self.config.prefix_tuning:
                 prefix_attention_mask = torch.ones(batch_size, self.config.pre_seq_len).to(x.device)

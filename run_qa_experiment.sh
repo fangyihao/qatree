@@ -12,16 +12,14 @@ encoder='roberta-base'
 args=$@
 
 
-lr="1e-5"
 bs=256
 mbs=8
-unfreeze_epoch=4
 
 nc=5
 max_node_num=2
 seed=5
 lr_schedule=fixed
-psl=64
+psl=32
 
 if [ ${dataset} = obqa ]
 then
@@ -55,7 +53,7 @@ run_name=TreeLM__ds_${dataset}__enc_${encoder}__sd${seed}__${dt}
 ###### Training ######
 python3 -u qa_experiment.py \
     --dataset $dataset \
-    --encoder $encoder -lr $lr -bs $bs --seed $seed -mbs ${mbs} --unfreeze_epoch ${unfreeze_epoch} -sl ${max_seq_len} --max_node_num ${max_node_num} \
+    --encoder $encoder -bs $bs --seed $seed -mbs ${mbs} -sl ${max_seq_len} --max_node_num ${max_node_num} \
     --n_epochs $n_epochs --max_epochs_before_stop ${max_epochs_before_stop} \
     --save_dir ${save_dir_pref}/${dataset}/${run_name} \
     --run_name ${run_name}\

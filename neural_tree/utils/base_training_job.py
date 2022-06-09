@@ -21,7 +21,7 @@ from transformers.models.roberta.modeling_roberta import RobertaModel
 #from patrickstar.runtime import initialize_engine
 #from patrickstar.utils import get_rank
 class BaseTrainingJob:
-    def __init__(self, network_name, task, dataset, network_params=None, neural_tree_params=None, dataset_params=None):
+    def __init__(self, network_name, task, dataset, network_params=None, neural_tree_params=None, dataset_params=None, optimization_params=None):
         assert task == 'node' or task == 'graph'
         assert network_name == 'original' or 'neural_tree'
         self.__network_name = network_name
@@ -34,6 +34,7 @@ class BaseTrainingJob:
         self.__training_params = self.create_default_params(network_name)
         self.update_training_params(network_params=network_params)
         self.update_training_params(dataset_params=dataset_params)
+        self.update_training_params(optimization_params=optimization_params)
         if task == "node":
             self.update_training_params(network_params={'input_dim': dataset.num_node_features,
                                                     'output_dim': dataset.num_classes})
@@ -184,10 +185,9 @@ class BaseTrainingJob:
             config.seq_len = self.__training_params['dataset_params']['seq_len']
             config.pre_seq_len = self.__training_params['network_params']['pre_seq_len']
             config.num_choices = self.__training_params['dataset_params']['num_choices']
-            config.first_attn_mask_layers = config.num_hidden_layers // 2
+            config.first_attn_mask_layers = config.num_hidden_layers
             config.graph_pooling = "context"
             config.aggr = "cat" # "cat" or "mean"
-            
             print(config)
             
             cls = get_neural_tree_network(config)
@@ -215,11 +215,11 @@ class BaseTrainingJob:
         print('num_total_params:', num_trainable_params + num_fixed_params)
 
 
-    def train(self, log_folder, optimization_params=None, dataset_params=None, decay_epochs=100, decay_rate=1.0,
+    def train(self, log_folder, optimization_params=None, dataset_params=None, 
               early_stop_window=-1, verbose=False):
         # update parameters
         self.update_training_params(optimization_params=optimization_params, dataset_params=dataset_params)
-
+        
         # move training to gpu if available
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.__net.to(device)
@@ -276,6 +276,9 @@ class BaseTrainingJob:
         opt = optim.Adam(self.__net.parameters(), lr=self.__training_params['optimization_params']['lr'],
                          weight_decay=self.__training_params['optimization_params']['weight_decay'])
 
+        decay_epochs=self.__training_params['optimization_params']['decay_epochs']
+        decay_rate=self.__training_params['optimization_params']['decay_rate']
+
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer=opt, step_size=decay_epochs, gamma=decay_rate)
 
         '''
@@ -308,7 +311,7 @@ class BaseTrainingJob:
         self.__net, opt = initialize_engine(model_func=lambda: self.__net, local_rank=get_rank(), config=config)
         '''
         
-        self.count_parameters(self.__net)
+        #self.count_parameters(self.__net)
         
         # train
         max_val_acc = 0
@@ -321,8 +324,17 @@ class BaseTrainingJob:
         tic = time.perf_counter()
         early_stop_step = 0
         for epoch in range(self.__training_params['optimization_params']['num_epochs']):
+
+            if epoch == self.__training_params['optimization_params']['refreeze_epochs']:
+                for name, param in self.__net.named_parameters():
+                    if 'prefix_encoder' not in name:
+                        param.requires_grad = False
+                        
+            self.count_parameters(self.__net)
+            
             early_stop_step += 1
             total_loss = 0.
+            
             self.__net.train()
             
             num_batches = len(train_loader)

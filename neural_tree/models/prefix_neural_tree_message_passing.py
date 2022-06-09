@@ -98,10 +98,10 @@ def get_neural_tree_network(config):
             
             #roberta = RobertaModel.from_pretrained("roberta-base")
             #mobilebert = MobileBertModel.from_pretrained("google/mobilebert-uncased")
-            
+            non_prefix_requires_grad = True
             if self.config.prefix_tuning == True:
                 for param in self.embeddings.parameters():
-                    param.requires_grad = False
+                    param.requires_grad = non_prefix_requires_grad
             
             
             ##

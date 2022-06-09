@@ -16,7 +16,7 @@ from neural_tree.utils import utils
 from neural_tree.utils import parser_utils
 import os
 DECODER_DEFAULT_LR = {
-    'csqa': 1e-3,
+    'csqa': 1e-5,
     'obqa': 3e-4,
     'medqa_usmle': 1e-3,
 }
@@ -103,7 +103,11 @@ def main(args):
                       'prefix_hidden_size': args.prefix_hidden_size}
     optimization_params = {'lr': args.learning_rate,
                            'num_epochs': 1000,
-                           'weight_decay': 0.001}
+                           'weight_decay': 0.001, 
+                           'decay_epochs': args.decay_epochs,
+                           'decay_rate': args.decay_rate,
+                           'refreeze_epochs':args.refreeze_epochs
+                           }
     dataset_params = {'mini_batch_size': args.mini_batch_size,
                       'batch_size': args.batch_size,
                       'shuffle': True,
@@ -151,8 +155,8 @@ def main(args):
                                     test_node_ratio=test_node_ratio)
 
         # training
-        train_job = BaseTrainingJob(algorithm, task, dataset, network_params, neural_tree_params, dataset_params)
-        model, best_acc = train_job.train(log_folder + '/' + str(i), optimization_params, dataset_params,
+        train_job = BaseTrainingJob(algorithm, task, dataset, network_params, neural_tree_params, dataset_params, optimization_params)
+        model, best_acc = train_job.train(log_folder + '/' + str(i), optimization_params, dataset_params, 
                                           early_stop_window=early_stop_window, verbose=verbose)
 
         if i == 0:
@@ -222,9 +226,11 @@ if __name__ == '__main__':
     # Optimization
     parser.add_argument('-lr', '--learning_rate', default=DECODER_DEFAULT_LR[args.dataset], type=float, help='Learning rate of parameters not in LM')
     parser.add_argument('-mbs', '--mini_batch_size', default=1, type=int)
-    parser.add_argument('--unfreeze_epoch', default=4, type=int, help="Number of the first few epochs in which LM’s parameters are kept frozen.")
-    parser.add_argument('--refreeze_epoch', default=10000, type=int)
+    parser.add_argument('--unfreeze_epochs', default=4, type=int, help="Number of the first few epochs in which LM’s parameters are kept frozen.")
+    parser.add_argument('--refreeze_epochs', default=15, type=int)
     parser.add_argument('--init_range', default=0.02, type=float, help='stddev when initializing with normal distribution')
+    parser.add_argument('--decay_epochs', default=100, type=int)
+    parser.add_argument('--decay_rate', default=0.1, type=float)
 
     # Additional Model Arguments
     parser.add_argument("--model_name_or_path", default=f"{args.encoder}", type=str, help="Path to pretrained model or model identifier from huggingface.co/models")
