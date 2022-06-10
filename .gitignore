@@ -1,3 +1,4 @@
 log/
+runs/*
 .project
 .pydevproject

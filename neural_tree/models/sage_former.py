@@ -13,6 +13,7 @@ from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.nn.dense.linear import Linear
 from torch_geometric.typing import Adj, OptTensor, OptPairTensor, Size
 
+from transformers.models.albert.modeling_albert import AlbertLayer
 from transformers.models.roberta.modeling_roberta import RobertaLayer
 from transformers.models.bert.modeling_bert import BertLayer
 from transformers import AutoConfig
@@ -157,6 +158,8 @@ class SAGEFormer2D(MessagePassing):
             cls = BertLayer
         elif config.name_or_path.startswith("roberta"):
             cls = RobertaLayer
+        elif config.name_or_path.startswith("albert"):
+            cls = AlbertLayer
         else:
             raise RuntimeError("Not implemented")
         
@@ -247,8 +250,12 @@ class SAGEFormer2D(MessagePassing):
         else:
             past_key_value = None
         
+        # print("out.size():", out.size())
         
-        out = self.layer_module(out, attention_mask = attention_mask, past_key_value=past_key_value)[0]
+        if self.config.name_or_path.startswith("albert"):
+            out = self.layer_module(out, attention_mask = attention_mask)[0]
+        else:
+            out = self.layer_module(out, attention_mask = attention_mask, past_key_value=past_key_value)[0]
         
 
         if self.normalize:

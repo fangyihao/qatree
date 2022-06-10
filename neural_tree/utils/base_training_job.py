@@ -10,6 +10,7 @@ from tensorboardX import SummaryWriter
 import os
 from transformers import AutoConfig
 from transformers.models.roberta.modeling_roberta import RobertaModel
+from torch import nn
 #from torch.distributed.fsdp import (
 #   FullyShardedDataParallel,
 #   CPUOffload,
@@ -32,15 +33,14 @@ class BaseTrainingJob:
             if dataset.num_node_features == 0:
                 raise RuntimeError('No node feature')
         self.__training_params = self.create_default_params(network_name)
-        self.update_training_params(network_params=network_params)
-        self.update_training_params(dataset_params=dataset_params)
-        self.update_training_params(optimization_params=optimization_params)
+        self.update_training_params(network_params=network_params, dataset_params=dataset_params, optimization_params=optimization_params)
+
         if task == "node":
             self.update_training_params(network_params={'input_dim': dataset.num_node_features,
                                                     'output_dim': dataset.num_classes})
         if self.__network_name == 'neural_tree':
             self.update_training_params(neural_tree_params=neural_tree_params)
-        self.remove_unused_network_params(self.__training_params['network_params'])
+        #self.remove_unused_network_params(self.__training_params['network_params'])
 
         # save self.__dataset
         if self.__network_name == 'original':
@@ -67,7 +67,8 @@ class BaseTrainingJob:
             else:
                 # print('Received {} graphs for {} classification.'.format(len(dataset),self.__task))
                 tic = time.perf_counter()
-                jth_file = "jth_{}_n{}_sl{}_tw{}.pt".format(self.__training_params['network_params']['aggr_encoder'], 
+                jth_file = "{}_jth_{}_n{}_sl{}_tw{}.pt".format(self.__training_params['dataset_params']['dataset'],
+                                                                self.__training_params['network_params']['aggr_encoder'], 
                                                                  self.__training_params['dataset_params']['max_node_num'],
                                                                  self.__training_params['dataset_params']['seq_len'],
                                                                  self.__training_params['dataset_params']['tree_width'])
@@ -111,6 +112,7 @@ class BaseTrainingJob:
 
     @staticmethod
     def create_default_params(network_name):
+        '''
         network_params = {'input_dim': None,
                           'output_dim': None,
                           'hidden_dim': 32,
@@ -127,6 +129,11 @@ class BaseTrainingJob:
         neural_tree_params = {'min_diameter': 1,
                               'max_diameter': None,
                               'sub_graph_radius': 2}
+        '''
+        network_params = {}
+        optimization_params = {}
+        dataset_params = {}
+        neural_tree_params = {}
         if network_name == 'original':
             training_params = {'network_params': network_params, 'optimization_params': optimization_params,
                                'dataset_params': dataset_params}
@@ -185,7 +192,8 @@ class BaseTrainingJob:
             config.seq_len = self.__training_params['dataset_params']['seq_len']
             config.pre_seq_len = self.__training_params['network_params']['pre_seq_len']
             config.num_choices = self.__training_params['dataset_params']['num_choices']
-            config.first_attn_mask_layers = config.num_hidden_layers
+            config.hidden_layer_retention_rate = self.__training_params['network_params']['hidden_layer_retention_rate']
+            config.first_attn_mask_layers = int(config.num_hidden_layers * config.hidden_layer_retention_rate)
             config.graph_pooling = "context"
             config.aggr = "cat" # "cat" or "mean"
             print(config)
@@ -215,16 +223,11 @@ class BaseTrainingJob:
         print('num_total_params:', num_trainable_params + num_fixed_params)
 
 
-    def train(self, log_folder, optimization_params=None, dataset_params=None, 
-              early_stop_window=-1, verbose=False):
+    def train(self, log_folder, early_stop_window=-1, verbose=False):
         # update parameters
-        self.update_training_params(optimization_params=optimization_params, dataset_params=dataset_params)
+        #self.update_training_params(optimization_params=optimization_params, dataset_params=dataset_params)
         
-        # move training to gpu if available
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.__net.to(device)
-        
-        
         '''
         n_gpus = torch.cuda.device_count()
         assert n_gpus >= 2, f"Requires at least 2 GPUs to run, but got {n_gpus}"
@@ -276,10 +279,37 @@ class BaseTrainingJob:
         opt = optim.Adam(self.__net.parameters(), lr=self.__training_params['optimization_params']['lr'],
                          weight_decay=self.__training_params['optimization_params']['weight_decay'])
 
-        decay_epochs=self.__training_params['optimization_params']['decay_epochs']
-        decay_rate=self.__training_params['optimization_params']['decay_rate']
+        self.__net.to(device)
 
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer=opt, step_size=decay_epochs, gamma=decay_rate)
+        # resume checkpoint
+        resume = self.__training_params['optimization_params']['resume_checkpoint'] is not None \
+            and self.__training_params['optimization_params']['resume_checkpoint'] != "None"
+        if resume:
+            print("loading from checkpoint: {}".format(self.__training_params['optimization_params']['resume_checkpoint']))
+            self.__training_params['optimization_params']['save_dir'] = os.path.dirname(self.__training_params['optimization_params']['resume_checkpoint'])
+
+            checkpoint = torch.load(self.__training_params['optimization_params']['resume_checkpoint'], map_location=device)
+            last_epoch = checkpoint['epoch']
+            global_step = checkpoint['global_step']
+            self.__net.load_state_dict(checkpoint["model"], strict=False)
+            opt.load_state_dict(checkpoint["optimizer"])
+
+        else:
+            last_epoch = -1
+            global_step = 0
+            
+        
+        lr_decay_epochs=self.__training_params['optimization_params']['lr_decay_epochs']
+        lr_decay_rate=self.__training_params['optimization_params']['lr_decay_rate']
+
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer=opt, step_size=lr_decay_epochs, gamma=lr_decay_rate, last_epoch=last_epoch)
+
+        if resume:
+            scheduler.load_state_dict(checkpoint["scheduler"])
+        
+        # move training to gpu if available
+        
+        #self.__net = nn.DataParallel(self.__net)
 
         '''
         config = {
@@ -323,7 +353,7 @@ class BaseTrainingJob:
 
         tic = time.perf_counter()
         early_stop_step = 0
-        for epoch in range(self.__training_params['optimization_params']['num_epochs']):
+        for epoch in range(last_epoch + 1, self.__training_params['optimization_params']['num_epochs']):
 
             if epoch == self.__training_params['optimization_params']['refreeze_epochs']:
                 for name, param in self.__net.named_parameters():
@@ -344,6 +374,7 @@ class BaseTrainingJob:
                 
                 pred = self.__net(batch.to(device))
                 label = batch.y
+                '''
                 if self.__task == 'node' and self.__network_name == 'original':
                     if isinstance(self.__training_params['network_params']['output_dim'], tuple):
                         pred = tuple(pred_i[batch.train_mask] for pred_i in pred)
@@ -355,7 +386,8 @@ class BaseTrainingJob:
                     loss = self.__net.loss(pred, label, (batch.y_room, batch.y_object))
                 else:
                     loss = self.__net.loss(pred, label)
-
+                '''
+                loss = self.__net.loss(pred, label)
                 loss.backward()
                 #self.__net.backward(loss)
                 
@@ -364,6 +396,7 @@ class BaseTrainingJob:
                 if i % (self.__training_params['dataset_params']['batch_size']//self.__training_params['dataset_params']['mini_batch_size']) == 0 or i == num_batches - 1:
                     opt.step()
                     opt.zero_grad()
+                    global_step += 1
                 
                 #if i % 100 == 0:
                 #    print('loss:', loss.item(), 'batch:', i)
@@ -408,6 +441,13 @@ class BaseTrainingJob:
                     print('Epoch {:03}. Loss: {:.4f}. Train accuracy: {:.4f}. Test accuracy: {:.4f}.'.
                           format(epoch, total_loss, train_result, test_result))
 
+            if self.__training_params['optimization_params']['save_model']:
+                model_state_dict = self.__net.state_dict()
+                checkpoint = {"model": model_state_dict, "optimizer": opt.state_dict(), "scheduler": scheduler.state_dict(), "epoch": epoch, "global_step": global_step}
+                model_path = os.path.join(self.__training_params['optimization_params']['save_dir'], 'model.pt')
+                print('Saving model to {}'.format(model_path))
+                torch.save(checkpoint, model_path)
+
         toc = time.perf_counter()
         print('Training completed (time elapsed: {:.4f} s). '.format(toc - tic))
 
@@ -433,12 +473,15 @@ class BaseTrainingJob:
         for data in data_loader:
             with torch.no_grad():
                 pred = self.__net(data.to(device))
+                '''
                 if isinstance(self.__training_params['network_params']['output_dim'], tuple):  # assume two node types
                     pred_room = pred[0].argmax(dim=1)
                     pred = pred[1].argmax(dim=1)  # object
                     pred[data.y_room] = pred_room[data.y_room]
                 else:
                     pred = pred.argmax(dim=1)
+                '''
+                pred = pred.argmax(dim=1)
                 label = data.y
 
             if self.__task == 'node' and self.__network_name == 'original':

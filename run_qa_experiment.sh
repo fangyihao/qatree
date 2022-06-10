@@ -9,11 +9,10 @@ shift
 encoder='roberta-base'
 #encoder='roberta-large'
 #encoder='google/mobilebert-uncased'
+#encoder='albert-xxlarge-v2'
 args=$@
 
 
-bs=256
-mbs=8
 
 nc=5
 max_node_num=2
@@ -40,20 +39,20 @@ random_ent_emb=false
 echo "***** hyperparameters *****"
 echo "dataset: $dataset"
 echo "enc_name: $encoder"
-echo "batch_size: $bs mini_batch_size: $mbs"
-echo "learning_rate: $lr"
 echo "******************************"
 
 save_dir_pref='runs'
-mkdir -p $save_dir_pref
 
 run_name=TreeLM__ds_${dataset}__enc_${encoder}__sd${seed}__${dt}
+
+mkdir -p ${save_dir_pref}/${dataset}/${run_name}
+
 # log=logs/train_${dataset}__${run_name}.log.txt
 
 ###### Training ######
 python3 -u qa_experiment.py \
     --dataset $dataset \
-    --encoder $encoder -bs $bs --seed $seed -mbs ${mbs} -sl ${max_seq_len} --max_node_num ${max_node_num} \
+    --encoder $encoder --seed $seed -sl ${max_seq_len} --max_node_num ${max_node_num} \
     --n_epochs $n_epochs --max_epochs_before_stop ${max_epochs_before_stop} \
     --save_dir ${save_dir_pref}/${dataset}/${run_name} \
     --run_name ${run_name}\

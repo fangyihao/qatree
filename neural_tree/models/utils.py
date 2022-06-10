@@ -20,14 +20,16 @@ def build_conv_layer(conv_block, input_dim, hidden_dim):
 
 def build_GraphSAGE_conv_layers(config):
     # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    
     convs = nn.ModuleList()
-    for i in range(config.num_hidden_layers):
-        if i > config.num_hidden_layers -3 or i < 2:
-            non_prefix_requires_grad = True
-        else: 
-            non_prefix_requires_grad = True
-        convs.append(SAGEFormer2D(config, normalize=False, non_prefix_requires_grad=non_prefix_requires_grad))
+    if config.name_or_path.startswith("albert"):
+        convs.append(SAGEFormer2D(config, normalize=False))
+    else:
+        for i in range(config.num_hidden_layers):
+            if i > config.num_hidden_layers -3:
+                non_prefix_requires_grad = True
+            else: 
+                non_prefix_requires_grad = False
+            convs.append(SAGEFormer2D(config, normalize=False, non_prefix_requires_grad=non_prefix_requires_grad))
     return convs
 
 def build_GAT_conv_layers(input_dim, hidden_dims, heads, concats, dropout=0.):

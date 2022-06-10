@@ -7,10 +7,11 @@ import torch.nn.functional as F
 import torch_geometric.nn as pyg_nn
 from transformers import (
     RobertaModel, MobileBertModel, RobertaTokenizer, 
-    RobertaPreTrainedModel, BertModel, BertPreTrainedModel, 
+    RobertaPreTrainedModel, BertModel, BertPreTrainedModel, AlbertPreTrainedModel, AlbertModel,
     PreTrainedModel, PretrainedConfig)
 from transformers.models.roberta.modeling_roberta import RobertaEmbeddings
 from transformers.models.bert.modeling_bert import BertEmbeddings
+from transformers.models.albert.modeling_albert import AlbertEmbeddings
 from torch import nn
 import torch
 
@@ -54,13 +55,15 @@ def get_neural_tree_network(config):
         cls = BertPreTrainedModel
     elif config.name_or_path.startswith("roberta"):
         cls = RobertaPreTrainedModel
+    elif config.name_or_path.startswith("albert"):
+        cls = AlbertPreTrainedModel
     else:
         raise RuntimeError("Not implemented")
     class PrefixNeuralTreeNetwork(cls):
     #class PrefixNeuralTreeNetwork(BertPreTrainedModel):
         #_keys_to_ignore_on_load_missing = [r"position_ids"]
         
-        def __init__(self, config, task='node', conv_block='GCN'):
+        def __init__(self, config, task='node', conv_block='GCN', non_prefix_requires_grad = False):
             """
             NeuralTreeNetwork is the child class of BasicNetwork, which implements basic message passing on graphs.
             The network parameters and loss functions are the same as the parent class. The difference is that this class
@@ -87,10 +90,14 @@ def get_neural_tree_network(config):
                 cls = BertEmbeddings
             elif config.name_or_path.startswith("roberta"):
                 cls = RobertaEmbeddings
+            elif config.name_or_path.startswith("albert"):
+                cls = AlbertEmbeddings
             else:
                 raise RuntimeError("Not implemented")
             
             self.embeddings = cls(config)
+            if config.name_or_path.startswith("albert"):
+                self.embedding_hidden_mapping_in = nn.Linear(config.embedding_size, config.hidden_size)
             
             self.dropout = torch.nn.Dropout(config.hidden_dropout_prob)
             self.classifier = torch.nn.Linear(config.hidden_size, 1)
@@ -98,7 +105,7 @@ def get_neural_tree_network(config):
             
             #roberta = RobertaModel.from_pretrained("roberta-base")
             #mobilebert = MobileBertModel.from_pretrained("google/mobilebert-uncased")
-            non_prefix_requires_grad = True
+            
             if self.config.prefix_tuning == True:
                 for param in self.embeddings.parameters():
                     param.requires_grad = non_prefix_requires_grad
@@ -203,7 +210,7 @@ def get_neural_tree_network(config):
     
         def forward(self, data):
             #return self.test_forward(data)
-            device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+            #device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
             
             x, token_type_ids, attention_mask, edge_index, batch, nc_mask = data.x, data.node_token_type_ids, data.node_attention_mask, data.edge_index, data.batch, data.nc_mask
             
@@ -234,9 +241,12 @@ def get_neural_tree_network(config):
             )
             x_leaf_len = x.size(0)
             
-            x = torch.cat([x, torch.zeros(x_all_len-x_leaf_len, *x.size()[1:]).to(device)])[x_index]
+            x = torch.cat([x, torch.zeros(x_all_len-x_leaf_len, *x.size()[1:]).to(x.device)])[x_index]
             
-            
+            if self.config.name_or_path.startswith("albert"):
+                x = self.embedding_hidden_mapping_in(x)
+                
+                
             
             # setup attention mask
             attention_mask = torch.cat([attention_mask[data.leaf_mask], \
@@ -251,7 +261,7 @@ def get_neural_tree_network(config):
             
             
             # setup edge weight and add self loops
-            edge_weight = torch.mul(torch.ones(edge_index.size(1)).to(device), 0.2)
+            edge_weight = torch.mul(torch.ones(edge_index.size(1)).to(edge_index.device), 0.2)
             edge_index, edge_weight = add_self_loops(edge_index, edge_weight, 1.0)
             
             if self.config.aggr == "cat":
@@ -278,7 +288,7 @@ def get_neural_tree_network(config):
             if not self.need_postmp:  # pre-iteration dropout for citation networks (might not be necessary in some case)
                 x = F.dropout(x, p=self.dropout, training=self.training)
             '''
-            for i in range(len(self.convs)):
+            for i in range(int(self.config.num_hidden_layers * self.config.hidden_layer_retention_rate)):
                 attention_mask = attention_mask if i < self.config.first_attn_mask_layers else None
                 
                 '''
@@ -290,7 +300,11 @@ def get_neural_tree_network(config):
                     for param in self.convs[i].parameters():
                         param = param.cuda(1)
                 '''
-                x = self.convs[i](x, attention_mask, edge_index = edge_index, edge_weight = edge_weight)
+                if self.config.name_or_path.startswith("albert"):
+                    idx = 0
+                else:
+                    idx = i
+                x = self.convs[idx](x, attention_mask, edge_index = edge_index, edge_weight = edge_weight)
                 if self.config.aggr == "cat":
                     x = x[:,:seq_len]
                 #print("x:", x.cpu().detach().numpy())
@@ -777,15 +791,24 @@ def get_neural_tree_network(config):
             
             if config.name_or_path.startswith("bert"):
                 prefix = "bert"
+                layer = "layer"
             elif config.name_or_path.startswith("roberta"):
                 prefix = "roberta"
+                layer = "layer"
+            elif config.name_or_path.startswith("albert"):
+                prefix = "albert"
+                layer = "albert_layer_groups.0.albert_layers"
             else:
                 raise RuntimeError("Not implemented")
+            
+            
             
             import re
             key_pairs = []
             for key in state_dict:
-                new_key = re.sub(prefix+r".encoder.layer.([0-9]+)", prefix+r".convs.\1.layer_module", key)
+                new_key = re.sub(prefix+r".encoder."+layer+r".([0-9]+)", prefix+r".convs.\1.layer_module", key)
+                if config.name_or_path.startswith("albert"):
+                    new_key = re.sub("albert.encoder.embedding_hidden_mapping_in", "albert.embedding_hidden_mapping_in", new_key)
                 key_pairs.append((key, new_key))
             for old_key, new_key in key_pairs:
                 state_dict[new_key] = state_dict.pop(old_key)

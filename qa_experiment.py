@@ -66,7 +66,7 @@ def main(args):
         kg = "ddb"
         
     
-    csqa_file = "csqa_{}_n{}_sl{}_tw{}.pt".format(args.encoder, args.max_node_num, args.max_seq_len, args.tree_width)
+    csqa_file = "{}_graph_{}_n{}_sl{}_tw{}.pt".format(args.dataset, args.encoder, args.max_node_num, args.max_seq_len, args.tree_width)
     csqa_path = "data/{}".format(csqa_file)
     if os.path.isfile('{}.zip'.format(csqa_path)):
         os.system('unzip {}.zip -d data'.format(csqa_path))
@@ -100,13 +100,17 @@ def main(args):
                       'pre_seq_len':args.pre_seq_len, 
                       'prefix_tuning': args.prefix_tuning, 
                       'prefix_projection': args.prefix_projection, 
-                      'prefix_hidden_size': args.prefix_hidden_size}
+                      'prefix_hidden_size': args.prefix_hidden_size,
+                      'hidden_layer_retention_rate': args.hidden_layer_retention_rate}
     optimization_params = {'lr': args.learning_rate,
-                           'num_epochs': 1000,
+                           'num_epochs': args.n_epochs,
                            'weight_decay': 0.001, 
-                           'decay_epochs': args.decay_epochs,
-                           'decay_rate': args.decay_rate,
-                           'refreeze_epochs':args.refreeze_epochs
+                           'lr_decay_epochs': args.lr_decay_epochs,
+                           'lr_decay_rate': args.lr_decay_rate,
+                           'refreeze_epochs':args.refreeze_epochs, 
+                           'resume_checkpoint': args.resume_checkpoint,
+                           'save_model': args.save_model,
+                           'save_dir': args.save_dir
                            }
     dataset_params = {'mini_batch_size': args.mini_batch_size,
                       'batch_size': args.batch_size,
@@ -114,7 +118,8 @@ def main(args):
                       'num_choices': args.num_choices,
                       'seq_len':args.max_seq_len,
                       'max_node_num':args.max_node_num, 
-                      'tree_width':args.tree_width}
+                      'tree_width':args.tree_width,
+                      'dataset': args.dataset}
     neural_tree_params = {'min_diameter': 1,      # diameter=0 means the H-tree is disconnected
                           'max_diameter': None,
                           'sub_graph_radius': None}
@@ -156,8 +161,7 @@ def main(args):
 
         # training
         train_job = BaseTrainingJob(algorithm, task, dataset, network_params, neural_tree_params, dataset_params, optimization_params)
-        model, best_acc = train_job.train(log_folder + '/' + str(i), optimization_params, dataset_params, 
-                                          early_stop_window=early_stop_window, verbose=verbose)
+        model, best_acc = train_job.train(log_folder + '/' + str(i), early_stop_window=early_stop_window, verbose=verbose)
 
         if i == 0:
             # save parameters in train_job to parameter.txt (only need to save once)
@@ -190,7 +194,7 @@ if __name__ == '__main__':
 
     # General
     parser.add_argument('--mode', default='train', choices=['train', 'eval'], help='run training or evaluation')
-    parser.add_argument('--save_dir', default=f'./saved_models/greaselm/', help='model output directory')
+    parser.add_argument('--save_dir', default=f'./saved_models/treelm/', help='model output directory')
     parser.add_argument('--save_model', default=True, type=utils.bool_flag, help="Whether to save model checkpoints or not.")
     parser.add_argument('--load_model_path', default=None, help="The model checkpoint to load in the evaluation mode.")
     parser.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS, help='show this help message and exit')
@@ -225,12 +229,12 @@ if __name__ == '__main__':
 
     # Optimization
     parser.add_argument('-lr', '--learning_rate', default=DECODER_DEFAULT_LR[args.dataset], type=float, help='Learning rate of parameters not in LM')
-    parser.add_argument('-mbs', '--mini_batch_size', default=1, type=int)
+    parser.add_argument('-mbs', '--mini_batch_size', default=8, type=int)
     parser.add_argument('--unfreeze_epochs', default=4, type=int, help="Number of the first few epochs in which LM’s parameters are kept frozen.")
-    parser.add_argument('--refreeze_epochs', default=15, type=int)
+    parser.add_argument('--refreeze_epochs', default=100, type=int)
     parser.add_argument('--init_range', default=0.02, type=float, help='stddev when initializing with normal distribution')
-    parser.add_argument('--decay_epochs', default=100, type=int)
-    parser.add_argument('--decay_rate', default=0.1, type=float)
+    parser.add_argument('--lr_decay_epochs', default=100, type=int)
+    parser.add_argument('--lr_decay_rate', default=0.1, type=float)
 
     # Additional Model Arguments
     parser.add_argument("--model_name_or_path", default=f"{args.encoder}", type=str, help="Path to pretrained model or model identifier from huggingface.co/models")
@@ -245,6 +249,8 @@ if __name__ == '__main__':
     parser.add_argument("--prefix_projection", default=False, type=bool, help="Apply a two-layer MLP head over the prefix embeddings")
     parser.add_argument("--prefix_hidden_size", default=256, type=int, help="The hidden size of the MLP projection head in Prefix Encoder if prefix projection is used")
     parser.add_argument("--hidden_dropout_prob", default=0.1, type=float, help="The dropout probability used in the models")
+    parser.add_argument("-hlrr", "--hidden_layer_retention_rate", default=1.0, type=float, help="The retention ratio of pretrained layers")
+
 
     args = parser.parse_args()
     main(args)
