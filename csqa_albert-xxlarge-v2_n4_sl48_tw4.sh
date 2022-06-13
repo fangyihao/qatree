@@ -3,4 +3,4 @@
 #SBATCH --partition=Aurora,Combined
 #SBATCH --gres=gpu:rtx8000
 
-CUDA_VISIBLE_DEVICES="0" ./run_qa_experiment.sh csqa --data_dir data/ -mbs 3 -hlrr "0.75" --tree_width 4
+CUDA_VISIBLE_DEVICES="0" ./run_qa_experiment.sh csqa --data_dir data/ -mbs 2 -hlrr "1.0" --tree_width 4

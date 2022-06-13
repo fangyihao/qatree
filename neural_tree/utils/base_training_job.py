@@ -11,6 +11,7 @@ import os
 from transformers import AutoConfig
 from transformers.models.roberta.modeling_roberta import RobertaModel
 from torch import nn
+from torch.nn import CrossEntropyLoss
 #from torch.distributed.fsdp import (
 #   FullyShardedDataParallel,
 #   CPUOffload,
@@ -309,7 +310,7 @@ class BaseTrainingJob:
         
         # move training to gpu if available
         
-        #self.__net = nn.DataParallel(self.__net)
+        self.__net = nn.DataParallel(self.__net)
 
         '''
         config = {
@@ -342,7 +343,8 @@ class BaseTrainingJob:
         '''
         
         #self.count_parameters(self.__net)
-        
+
+        loss_fct = CrossEntropyLoss(reduction='mean')
         # train
         max_val_acc = 0
         max_test_acc = 0  # If val_loader is not None, compute using the model weights that lead to best_val_acc
@@ -371,8 +373,8 @@ class BaseTrainingJob:
             opt.zero_grad()
             for i, batch in enumerate(train_loader):
                 #opt.zero_grad()
-                
-                pred = self.__net(batch.to(device))
+                batch = batch.to(device)
+                pred = self.__net(batch)
                 label = batch.y
                 '''
                 if self.__task == 'node' and self.__network_name == 'original':
@@ -387,7 +389,8 @@ class BaseTrainingJob:
                 else:
                     loss = self.__net.loss(pred, label)
                 '''
-                loss = self.__net.loss(pred, label)
+                #loss = self.__net.loss(pred, label)
+                loss = loss_fct(pred, label)
                 loss.backward()
                 #self.__net.backward(loss)
                 
@@ -397,7 +400,13 @@ class BaseTrainingJob:
                     opt.step()
                     opt.zero_grad()
                     global_step += 1
-                
+                    
+                    '''
+                    if epoch == 2:
+                        val_result = self.test(val_loader, is_validation=True)
+                        print('validation result:', val_result, 'epoch:', epoch)
+                        self.__net.train()
+                    '''
                 #if i % 100 == 0:
                 #    print('loss:', loss.item(), 'batch:', i)
 

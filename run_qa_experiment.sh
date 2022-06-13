@@ -6,16 +6,16 @@ dt=`date '+%Y%m%d_%H%M%S'`
 dataset=$1
 shift
 #encoder='bert-base-uncased'
-encoder='roberta-base'
+#encoder='roberta-base'
 #encoder='roberta-large'
 #encoder='google/mobilebert-uncased'
-#encoder='albert-xxlarge-v2'
+encoder='albert-xxlarge-v2'
 args=$@
 
 
 
 nc=5
-max_node_num=2
+max_node_num=4
 seed=5
 lr_schedule=fixed
 psl=32

@@ -341,7 +341,7 @@ def get_neural_tree_network(config):
                 return tuple(self.post_mp[i](x) for i in range(len(self.post_mp)))
             else:
                 return x
-    
+        '''
         def loss(self, pred, label, mask=None):
             #print("pred.size():", pred.size())
             #print("label.size():", label.size())
@@ -353,7 +353,7 @@ def get_neural_tree_network(config):
             else:
                 return sum(F.cross_entropy(pred[i][mask[i], :], label[mask[i]]) for i in range(len(mask))
                            if mask[i].sum().item() > 0)
-        
+        '''
         @classmethod
         def from_pretrained(cls, pretrained_model_name_or_path: Optional[Union[str, os.PathLike]], *model_args, **kwargs):
             r"""
