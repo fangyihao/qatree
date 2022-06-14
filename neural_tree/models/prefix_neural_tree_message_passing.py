@@ -167,35 +167,35 @@ def get_neural_tree_network(config):
             #super(PrefixNeuralTreeNetwork, self).__init__(None, None, task, conv_block, None, num_layers,
             #                                        None, GAT_heads, GAT_concats, dropout, encoder = encoder)
             
-            self.num_choices = config.num_choices
-            
+            #self.num_choices = config.num_choices
+        '''    
         def test_forward(self, data):
             x, token_type_ids, attention_mask, output_mask, edge_index, batch, nc_mask = data.x, data.node_token_type_ids, data.node_attention_mask, data.node_output_mask, data.edge_index, data.batch, data.nc_mask
             
-            '''
-            print("x:", list(x.cpu().numpy()))
-            print("edge_index:", list(edge_index.cpu().numpy()))
-            print("data.leaf_mask:", list(data.leaf_mask.cpu().numpy()))
-            print("batch*self.num_choices + nc_mask:", list((batch*self.num_choices + nc_mask).cpu().numpy()))
-            print("data.node_context_mask:", list(data.node_context_mask.bool().cpu().numpy()))
-            '''
+            
+            #print("x:", list(x.cpu().numpy()))
+            #print("edge_index:", list(edge_index.cpu().numpy()))
+            #print("data.leaf_mask:", list(data.leaf_mask.cpu().numpy()))
+            #print("batch*self.num_choices + nc_mask:", list((batch*self.num_choices + nc_mask).cpu().numpy()))
+            #print("data.node_context_mask:", list(data.node_context_mask.bool().cpu().numpy()))
+            
             x = x[data.node_context_mask.bool()].long()
             token_type_ids = token_type_ids[data.node_context_mask.bool()].long()
             attention_mask = attention_mask[data.node_context_mask.bool()].long()
             output_mask = output_mask[data.node_context_mask.bool()].long()
             
-            '''
-            print("attention_mask:", list(attention_mask.cpu().numpy()))
-            print("token_type_ids:", list(token_type_ids.cpu().numpy()))
-            print("output_mask:", list(output_mask.cpu().numpy()))
-            '''
-            '''
-            tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
             
-            for sent in x: 
-                sent = tokenizer.decode(sent, skip_special_tokens=True)
-                print("sent:", sent)
-            '''
+            #print("attention_mask:", list(attention_mask.cpu().numpy()))
+            #print("token_type_ids:", list(token_type_ids.cpu().numpy()))
+            #print("output_mask:", list(output_mask.cpu().numpy()))
+            
+            
+            #tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
+            
+            #for sent in x: 
+            #    sent = tokenizer.decode(sent, skip_special_tokens=True)
+            #    print("sent:", sent)
+            
             x = self.roberta(x, token_type_ids=token_type_ids) # attention_mask=attention_mask, 
             #x = x[1]
             x = x[0][:,0]
@@ -205,7 +205,7 @@ def get_neural_tree_network(config):
             #print("x:", x.size())
             
             return x
-        
+        '''
         
     
         def forward(self, data):
@@ -213,6 +213,8 @@ def get_neural_tree_network(config):
             #device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
             
             x, token_type_ids, attention_mask, edge_index, batch, nc_mask = data.x, data.node_token_type_ids, data.node_attention_mask, data.edge_index, data.batch, data.nc_mask
+            
+            num_choices = torch.max(nc_mask).long() + 1
             
             if data.num_node_features == 0:
                 raise RuntimeError('No node feature')
@@ -261,8 +263,8 @@ def get_neural_tree_network(config):
             
             
             # setup edge weight and add self loops
-            edge_weight = torch.mul(torch.ones(edge_index.size(1)).to(edge_index.device), 0.2)
-            edge_index, edge_weight = add_self_loops(edge_index, edge_weight, 1.0)
+            edge_weight = torch.mul(torch.ones(edge_index.size(1)).to(edge_index.device), 0.2) #0.2
+            edge_index, edge_weight = add_self_loops(edge_index, edge_weight, 1.0) #1.0
             
             if self.config.aggr == "cat":
                 non_self_loop_mask = edge_index[0] != edge_index[1]
@@ -278,7 +280,7 @@ def get_neural_tree_network(config):
                 return rt
             #print("context_index:", context_index.size(), list(context_index.cpu().numpy()))
             context_self_loop_mask = torch.logical_and(equal(edge_index[0], context_index), equal(edge_index[1], context_index))
-            edge_weight[context_self_loop_mask] = 2.0
+            edge_weight[context_self_loop_mask] = 2.0 # 2.0
             
             #print("edge_index:", edge_index.size(), list(edge_index.cpu().numpy()))
             
@@ -327,11 +329,11 @@ def get_neural_tree_network(config):
                 pool_mask = torch.ones(x.size(0)).bool()
             else:
                 raise RuntimeError("Not implemented")
-            x = pyg_nn.global_mean_pool(x[pool_mask, :], batch[pool_mask]*self.num_choices + nc_mask[pool_mask])
+            x = pyg_nn.global_mean_pool(x[pool_mask, :], batch[pool_mask]*num_choices + nc_mask[pool_mask])
             
             
             x = self.classifier(x)
-            x = x.view(-1, self.num_choices)
+            x = x.view(-1, num_choices)
             
             #print("x.size():", x.size())
     

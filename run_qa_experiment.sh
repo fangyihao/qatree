@@ -13,8 +13,6 @@ encoder='albert-xxlarge-v2'
 args=$@
 
 
-
-nc=5
 max_node_num=4
 seed=5
 lr_schedule=fixed
@@ -29,7 +27,7 @@ else
   max_epochs_before_stop=10
 fi
 
-max_seq_len=48
+max_seq_len=64
 ent_emb=tzw
 
 resume_checkpoint=None
@@ -57,7 +55,7 @@ python3 -u qa_experiment.py \
     --save_dir ${save_dir_pref}/${dataset}/${run_name} \
     --run_name ${run_name}\
     --resume_checkpoint ${resume_checkpoint} --resume_id ${resume_id} --random_ent_emb ${random_ent_emb} --ent_emb ${ent_emb//,/ } --lr_schedule ${lr_schedule} \
-    --pre_seq_len ${psl} --num_choices ${nc} --inhouse False \
+    --pre_seq_len ${psl} --inhouse False \
     $args \
 # > ${log} 2>&1 &
 # echo log: ${log}

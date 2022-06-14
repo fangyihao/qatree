@@ -17,8 +17,8 @@ from neural_tree.utils import parser_utils
 import os
 DECODER_DEFAULT_LR = {
     'csqa': 1e-5,
-    'obqa': 3e-4,
-    'medqa_usmle': 1e-3,
+    'obqa': 1e-5,
+    'medqa_usmle': 1e-5,
 }
 
 def get_devices(use_cuda):
@@ -115,7 +115,7 @@ def main(args):
     dataset_params = {'mini_batch_size': args.mini_batch_size,
                       'batch_size': args.batch_size,
                       'shuffle': True,
-                      'num_choices': args.num_choices,
+                      #'num_choices': args.num_choices,
                       'seq_len':args.max_seq_len,
                       'max_node_num':args.max_node_num, 
                       'tree_width':args.tree_width,
@@ -211,7 +211,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_node_num', default=200, type=int, help="Max number of nodes / the threshold used to prune nodes.")
     parser.add_argument('--subsample', default=1.0, type=float, help="The ratio to subsample the training set.")
     parser.add_argument('--n_train', default=-1, type=int, help="Number of training examples to use. Setting it to -1 means using the `subsample` argument to determine the training set size instead; otherwise it will override the `subsample` argument.")
-    parser.add_argument('--num_choices', default=5, type=int, help="Number of choices")
+    #parser.add_argument('--num_choices', default=5, type=int, help="Number of choices")
     parser.add_argument('--tree_width', default=1, type=int, help="Tree width")
     parser.add_argument("--cxt_node_connects_all", default=False, type=utils.bool_flag, help="Whether to connect the interaction node to all the retrieved KG nodes or only the linked nodes.")
 

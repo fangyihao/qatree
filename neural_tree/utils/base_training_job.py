@@ -192,7 +192,7 @@ class BaseTrainingJob:
             config.prefix_hidden_size = self.__training_params['network_params']['prefix_hidden_size']
             config.seq_len = self.__training_params['dataset_params']['seq_len']
             config.pre_seq_len = self.__training_params['network_params']['pre_seq_len']
-            config.num_choices = self.__training_params['dataset_params']['num_choices']
+            #config.num_choices = self.__training_params['dataset_params']['num_choices']
             config.hidden_layer_retention_rate = self.__training_params['network_params']['hidden_layer_retention_rate']
             config.first_attn_mask_layers = int(config.num_hidden_layers * config.hidden_layer_retention_rate)
             config.graph_pooling = "context"
