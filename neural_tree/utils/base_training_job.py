@@ -310,7 +310,7 @@ class BaseTrainingJob:
         
         # move training to gpu if available
         
-        self.__net = nn.DataParallel(self.__net)
+        #self.__net = nn.DataParallel(self.__net)
 
         '''
         config = {

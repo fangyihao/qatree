@@ -27,7 +27,7 @@ else
   max_epochs_before_stop=10
 fi
 
-max_seq_len=64
+max_seq_len=48
 ent_emb=tzw
 
 resume_checkpoint=None

@@ -214,7 +214,7 @@ def get_neural_tree_network(config):
             
             x, token_type_ids, attention_mask, edge_index, batch, nc_mask = data.x, data.node_token_type_ids, data.node_attention_mask, data.edge_index, data.batch, data.nc_mask
             
-            num_choices = torch.max(nc_mask).long() + 1
+            num_choices = torch.max(nc_mask).long().item() + 1
             
             if data.num_node_features == 0:
                 raise RuntimeError('No node feature')
