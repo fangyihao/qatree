@@ -84,7 +84,7 @@ def main(args):
     early_stop_window = -1  # setting to -1 will disable early stop
     verbose = False
     log_folder_master = project_dir + '/log'
-    
+    save_folder_master = project_dir + '/run'
     ############### algorithm ##########################################
     algorithm = 'neural_tree'
     # algorithm = 'original'
@@ -136,8 +136,15 @@ def main(args):
     #random.seed(0)
 
     # setup log folder, parameter and accuracy files
-    log_folder = log_folder_master + datetime.now().strftime('/%Y%m%d-%H%M%S')
+    curr_dt = datetime.now()
+    log_folder = log_folder_master + curr_dt.strftime('/%Y%m%d-%H%M%S') + '_' + args.dataset + '_' + args.encoder
     mkdir(log_folder)
+    
+    if args.save_dir is None:
+        args.save_dir = save_folder_master + '/' + args.dataset + '/' + curr_dt.strftime('/%Y%m%d-%H%M%S') + '_' + args.dataset + '_' + args.encoder
+        os.system('mkdir -p ' + args.save_dir)
+    
+    
     print('Starting graph classification on CommonsenseQA, OpenbookQA, and MedQA datasets using {}. Results saved to {}'.
           format(algorithm, log_folder))
     f_param = open(log_folder + '/parameter.txt', 'w')
@@ -194,11 +201,10 @@ if __name__ == '__main__':
 
     # General
     parser.add_argument('--mode', default='train', choices=['train', 'eval'], help='run training or evaluation')
-    parser.add_argument('--save_dir', default=f'./saved_models/treelm/', help='model output directory')
+    parser.add_argument('--save_dir', default=None, help='model output directory')
     parser.add_argument('--save_model', default=True, type=utils.bool_flag, help="Whether to save model checkpoints or not.")
     parser.add_argument('--load_model_path', default=None, help="The model checkpoint to load in the evaluation mode.")
     parser.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS, help='show this help message and exit')
-    parser.add_argument("--run_name", required=True, type=str, help="The name of this experiment run.")
     parser.add_argument("--resume_checkpoint", default=None, type=str,
                         help="The checkpoint to resume training from.")
     parser.add_argument('--use_wandb', default=False, type=utils.bool_flag, help="Whether to use wandb or not.")
@@ -208,7 +214,7 @@ if __name__ == '__main__':
     parser.add_argument('--train_adj', default=f'{args.data_dir}/{args.dataset}/graph/train.graph.adj.pk', help="The path to the retrieved KG subgraphs of the training set.")
     parser.add_argument('--dev_adj', default=f'{args.data_dir}/{args.dataset}/graph/dev.graph.adj.pk', help="The path to the retrieved KG subgraphs of the dev set.")
     parser.add_argument('--test_adj', default=f'{args.data_dir}/{args.dataset}/graph/test.graph.adj.pk', help="The path to the retrieved KG subgraphs of the test set.")
-    parser.add_argument('--max_node_num', default=200, type=int, help="Max number of nodes / the threshold used to prune nodes.")
+    parser.add_argument('--max_node_num', default=4, type=int, help="Max number of nodes / the threshold used to prune nodes.")
     parser.add_argument('--subsample', default=1.0, type=float, help="The ratio to subsample the training set.")
     parser.add_argument('--n_train', default=-1, type=int, help="Number of training examples to use. Setting it to -1 means using the `subsample` argument to determine the training set size instead; otherwise it will override the `subsample` argument.")
     #parser.add_argument('--num_choices', default=5, type=int, help="Number of choices")
@@ -245,7 +251,7 @@ if __name__ == '__main__':
     parser.add_argument("--model_revision", default="main", type=str, help="The specific model version to use (can be a branch name, tag name or commit id).")
     parser.add_argument("--use_auth_token", default=False, type=bool, help="Will use the token generated when running `transformers-cli login` (necessary to use this script with private models).")
     parser.add_argument("--prefix_tuning", default=False, type=bool, help="Will use P-tuning v2 during training")
-    parser.add_argument("--pre_seq_len", default=128, type=int, help="The length of prompt")
+    parser.add_argument("--pre_seq_len", default=32, type=int, help="The length of prompt")
     parser.add_argument("--prefix_projection", default=False, type=bool, help="Apply a two-layer MLP head over the prefix embeddings")
     parser.add_argument("--prefix_hidden_size", default=256, type=int, help="The hidden size of the MLP projection head in Prefix Encoder if prefix projection is used")
     parser.add_argument("--hidden_dropout_prob", default=0.1, type=float, help="The dropout probability used in the models")

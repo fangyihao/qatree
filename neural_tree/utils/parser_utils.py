@@ -54,7 +54,7 @@ def add_data_arguments(parser):
     parser.add_argument('--dev_statements', default='{data_dir}/{dataset}/statement/dev.statement.jsonl')
     parser.add_argument('--test_statements', default='{data_dir}/{dataset}/statement/test.statement.jsonl')
     # preprocessing options
-    parser.add_argument('-sl', '--max_seq_len', default=100, type=int)
+    parser.add_argument('-sl', '--max_seq_len', default=48, type=int)
     # set dataset defaults
     args, _ = parser.parse_known_args()
     parser.set_defaults(ent_emb_paths=[EMB_PATHS.get(s) for s in args.ent_emb],
@@ -70,7 +70,13 @@ def add_data_arguments(parser):
 
 
 def add_encoder_arguments(parser):
-    parser.add_argument('-enc', '--encoder', default='bert-large-uncased', help='encoder type')
+    #encoder='bert-base-uncased'
+    #encoder='bert-large-uncased'
+    #encoder='roberta-base'
+    #encoder='roberta-large'
+    #encoder='google/mobilebert-uncased'
+    #encoder='albert-xxlarge-v2'
+    parser.add_argument('-enc', '--encoder', default='albert-xxlarge-v2', help='encoder type')
     args, _ = parser.parse_known_args()
     parser.set_defaults(encoder_lr=ENCODER_DEFAULT_LR[args.dataset].get(args.encoder, ENCODER_DEFAULT_LR['default']))
 
