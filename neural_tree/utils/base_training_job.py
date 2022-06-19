@@ -454,8 +454,11 @@ class BaseTrainingJob:
                 model_state_dict = self.__net.state_dict()
                 checkpoint = {"model": model_state_dict, "optimizer": opt.state_dict(), "scheduler": scheduler.state_dict(), "epoch": epoch, "global_step": global_step}
                 model_path = os.path.join(self.__training_params['optimization_params']['save_dir'], 'model.pt')
-                print('Saving model to {}'.format(model_path))
-                torch.save(checkpoint, model_path)
+                print('Saving model to {}.{}'.format(model_path, epoch))
+                torch.save(checkpoint, '{}.{}'.format(model_path, epoch))
+                keep_epochs = 3
+                if os.path.isfile('{}.{}'.format(model_path, epoch-keep_epochs)):
+                    os.system('rm {}.{}'.format(model_path, epoch-keep_epochs))
 
         toc = time.perf_counter()
         print('Training completed (time elapsed: {:.4f} s). '.format(toc - tic))

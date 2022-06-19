@@ -94,6 +94,40 @@ def main(args):
         train_node_ratio = 0.7
         val_node_ratio = 0.1
         test_node_ratio = 0.2
+
+    #####################################################################
+
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available() and args.cuda:
+        torch.cuda.manual_seed(args.seed)
+
+    #random.seed(0)
+
+    # setup log folder, parameter and accuracy files
+    curr_dt = datetime.now()
+    log_folder = log_folder_master + curr_dt.strftime('/%Y%m%d-%H%M%S') + '_' + args.dataset + '_' + args.encoder
+    os.system('mkdir -p ' + log_folder)
+    
+    if args.save_dir is None:
+        args.save_dir = save_folder_master + '/' + args.dataset + '/' + curr_dt.strftime('/%Y%m%d-%H%M%S') + '_' + args.dataset + '_' + args.encoder
+        os.system('mkdir -p ' + args.save_dir)
+    
+    
+    print('Starting graph classification on CommonsenseQA, OpenbookQA, and MedQA datasets using {}. Results saved to {}'.
+          format(algorithm, log_folder))
+    f_param = open(log_folder + '/parameter.txt', 'w')
+    f_log = open(log_folder + '/accuracy.txt', 'w')
+    
+    if task == "node":
+        print('train_node_ratio: {}'.format(train_node_ratio), file=f_param)
+        print('val_node_ratio: {}'.format(val_node_ratio), file=f_param)
+        print('test_node_ratio: {}'.format(test_node_ratio), file=f_param)
+
+
+
     network_params = {'aggr_encoder':args.encoder,
                       'conv_block': 'GraphSAGE',
                       'dropout': 0.25, 
@@ -123,37 +157,8 @@ def main(args):
     neural_tree_params = {'min_diameter': 1,      # diameter=0 means the H-tree is disconnected
                           'max_diameter': None,
                           'sub_graph_radius': None}
-    
-    #####################################################################
 
 
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if torch.cuda.is_available() and args.cuda:
-        torch.cuda.manual_seed(args.seed)
-
-    #random.seed(0)
-
-    # setup log folder, parameter and accuracy files
-    curr_dt = datetime.now()
-    log_folder = log_folder_master + curr_dt.strftime('/%Y%m%d-%H%M%S') + '_' + args.dataset + '_' + args.encoder
-    mkdir(log_folder)
-    
-    if args.save_dir is None:
-        args.save_dir = save_folder_master + '/' + args.dataset + '/' + curr_dt.strftime('/%Y%m%d-%H%M%S') + '_' + args.dataset + '_' + args.encoder
-        os.system('mkdir -p ' + args.save_dir)
-    
-    
-    print('Starting graph classification on CommonsenseQA, OpenbookQA, and MedQA datasets using {}. Results saved to {}'.
-          format(algorithm, log_folder))
-    f_param = open(log_folder + '/parameter.txt', 'w')
-    f_log = open(log_folder + '/accuracy.txt', 'w')
-    
-    if task == "node":
-        print('train_node_ratio: {}'.format(train_node_ratio), file=f_param)
-        print('val_node_ratio: {}'.format(val_node_ratio), file=f_param)
-        print('test_node_ratio: {}'.format(test_node_ratio), file=f_param)
 
     # run experiment
     test_accuracy_list = []
