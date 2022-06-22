@@ -332,6 +332,8 @@ def convert_knowledge_graph_to_jths(data, min_diameter=None, max_diameter=None, 
         
         print("data_jth:", data_jth)
         
+        #print("data.x:" + str(list(data.x)) + ",data.edge_index:" + str(list(data.edge_index)) + ",data_jth.x:" + str(list(data_jth.x)) + ",data_jth.edge_index:" + str(list(data_jth.edge_index)))
+        
         jths.append(data_jth)
     
     item_dict = {}

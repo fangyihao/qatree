@@ -7,7 +7,7 @@ shift
 
 args=$@
 
-seed=5
+seed=4
 lr_schedule=fixed
 
 ent_emb=tzw
@@ -21,6 +21,5 @@ python3 -u qa_experiment.py \
     --dataset $dataset \
     --seed $seed \
     --resume_checkpoint ${resume_checkpoint} --resume_id ${resume_id} --random_ent_emb ${random_ent_emb} --ent_emb ${ent_emb//,/ } --lr_schedule ${lr_schedule} \
-    --inhouse False \
     $args \
 

@@ -3,7 +3,7 @@ This script computes results for the scene graph experiments using the Neural Tr
 vanilla architectures (message passing on original graphs).
 The dataset split is generated randomly for each run with fixed random seed.
 """
-from neural_tree.utils.base_training_job import BaseTrainingJob, print_log
+from neural_tree.utils.base_job import BaseJob, print_log
 from statistics import mean, stdev
 from os import mkdir, path
 import random
@@ -56,27 +56,68 @@ def load_data(args, devices, kg):
 
     return dataset.train(), dataset.dev(), dataset.test()
 
-def main(args):
-    ############## dataset ############################################
-    project_dir = path.dirname(path.abspath(__file__))
+def load_params(args):
+    
+    network_params = {'aggr_encoder':args.encoder,
+                      'conv_block': 'GraphSAGE',
+                      'dropout': 0.25, 
+                      'pre_seq_len':args.pre_seq_len, 
+                      'prefix_tuning': args.prefix_tuning, 
+                      'prefix_projection': args.prefix_projection, 
+                      'prefix_hidden_size': args.prefix_hidden_size,
+                      'hidden_layer_retention_rate': args.hidden_layer_retention_rate}
+    optimization_params = {'lr': args.learning_rate,
+                           'num_epochs': args.n_epochs,
+                           'weight_decay': 0.001, 
+                           'lr_decay_epochs': args.lr_decay_epochs,
+                           'lr_decay_rate': args.lr_decay_rate,
+                           'refreeze_epochs':args.refreeze_epochs, 
+                           'resume_checkpoint': args.resume_checkpoint,
+                           'save_model': args.save_model,
+                           'save_dir': args.save_dir
+                           }
+    dataset_params = {'mini_batch_size': args.mini_batch_size,
+                      'batch_size': args.batch_size,
+                      'shuffle': True,
+                      #'num_choices': args.num_choices,
+                      'seq_len':args.max_seq_len,
+                      'max_node_num':args.max_node_num, 
+                      'tree_width':args.tree_width,
+                      'dataset': args.dataset,
+                      'inhouse': args.inhouse}
+    neural_tree_params = {'min_diameter': 1,      # diameter=0 means the H-tree is disconnected
+                          'max_diameter': None,
+                          'sub_graph_radius': None}
 
+    return network_params, optimization_params, dataset_params, neural_tree_params
+
+def load_cache(args):
     devices = get_devices(args.cuda)
     kg = "cpnet"
     if args.dataset == "medqa_usmle":
         kg = "ddb"
         
-    
-    csqa_file = "{}_graph_{}_n{}_sl{}_tw{}.pt".format(args.dataset, args.encoder, args.max_node_num, args.max_seq_len, args.tree_width)
-    csqa_path = "data/{}".format(csqa_file)
-    if os.path.isfile('{}.zip'.format(csqa_path)):
-        os.system('unzip {}.zip -d data'.format(csqa_path))
-        dataset = torch.load(csqa_path)
-        os.system('rm {}'.format(csqa_path))
+    graph_file = "{}_graph_{}_n{}_sl{}_tw{}{}.pt".format(args.dataset, args.encoder, args.max_node_num, args.max_seq_len, args.tree_width, '_inhouse' if args.inhouse else '')
+    graph_path = "data/{}".format(graph_file)
+    if os.path.isfile('{}.zip'.format(graph_path)):
+        os.system('unzip {}.zip -d data'.format(graph_path))
+        dataset = torch.load(graph_path)
+        os.system('rm {}'.format(graph_path))
     else:
         dataset = load_data(args, devices, kg)
-        torch.save(dataset, csqa_path)
-        os.system('cd data && zip -m {}.zip {} '.format(csqa_file, csqa_file))
-        #os.system('rm {}'.format(csqa_path))
+        torch.save(dataset, graph_path)
+        os.system('cd data && zip -m {}.zip {} '.format(graph_file, graph_file))
+        #os.system('rm {}'.format(graph_path))
+    return dataset
+
+def train(args):
+    ############## dataset ############################################
+    project_dir = path.dirname(path.abspath(__file__))
+
+    
+        
+    dataset = load_cache(args)
+    
     task = 'graph'
     
     ############## run control #########################################
@@ -127,38 +168,7 @@ def main(args):
         print('test_node_ratio: {}'.format(test_node_ratio), file=f_param)
 
 
-
-    network_params = {'aggr_encoder':args.encoder,
-                      'conv_block': 'GraphSAGE',
-                      'dropout': 0.25, 
-                      'pre_seq_len':args.pre_seq_len, 
-                      'prefix_tuning': args.prefix_tuning, 
-                      'prefix_projection': args.prefix_projection, 
-                      'prefix_hidden_size': args.prefix_hidden_size,
-                      'hidden_layer_retention_rate': args.hidden_layer_retention_rate}
-    optimization_params = {'lr': args.learning_rate,
-                           'num_epochs': args.n_epochs,
-                           'weight_decay': 0.001, 
-                           'lr_decay_epochs': args.lr_decay_epochs,
-                           'lr_decay_rate': args.lr_decay_rate,
-                           'refreeze_epochs':args.refreeze_epochs, 
-                           'resume_checkpoint': args.resume_checkpoint,
-                           'save_model': args.save_model,
-                           'save_dir': args.save_dir
-                           }
-    dataset_params = {'mini_batch_size': args.mini_batch_size,
-                      'batch_size': args.batch_size,
-                      'shuffle': True,
-                      #'num_choices': args.num_choices,
-                      'seq_len':args.max_seq_len,
-                      'max_node_num':args.max_node_num, 
-                      'tree_width':args.tree_width,
-                      'dataset': args.dataset}
-    neural_tree_params = {'min_diameter': 1,      # diameter=0 means the H-tree is disconnected
-                          'max_diameter': None,
-                          'sub_graph_radius': None}
-
-
+    network_params, optimization_params, dataset_params, neural_tree_params = load_params(args)
 
     # run experiment
     test_accuracy_list = []
@@ -172,7 +182,7 @@ def main(args):
                                     test_node_ratio=test_node_ratio)
 
         # training
-        train_job = BaseTrainingJob(algorithm, task, dataset, network_params, neural_tree_params, dataset_params, optimization_params)
+        train_job = BaseJob(algorithm, task, dataset, network_params, neural_tree_params, dataset_params, optimization_params)
         model, best_acc = train_job.train(log_folder + '/' + str(i), early_stop_window=early_stop_window, verbose=verbose)
 
         if i == 0:
@@ -197,6 +207,23 @@ def main(args):
     f_log.close()
     print('End of scene_graph_experiment.py. Results saved to: {}\n'.format(log_folder))
 
+def evaluate(args):
+    task = 'graph'
+    algorithm = 'neural_tree'
+    dataset = load_cache(args)
+    network_params, optimization_params, dataset_params, neural_tree_params = load_params(args)
+    eval_job = BaseJob(algorithm, task, dataset, network_params, neural_tree_params, dataset_params, optimization_params)
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    train_loader, val_loader, test_loader = eval_job.get_dataloader()
+    checkpoint = torch.load(args.load_model_path, map_location=device)
+    epoch = checkpoint['epoch']
+    global_step = checkpoint['global_step']
+    net = eval_job.get_net()
+    net.to(device)
+    net.load_state_dict(checkpoint["model"], strict=False)
+    test_result = eval_job.test(test_loader)
+    print('test result:', test_result, 'epoch:', epoch, 'global_step:', global_step)
+    
 
 if __name__ == '__main__':
     __spec__ = None
@@ -264,4 +291,7 @@ if __name__ == '__main__':
 
 
     args = parser.parse_args()
-    main(args)
+    if args.mode == 'train':
+        train(args)
+    elif args.mode == 'eval':
+        evaluate(args)
