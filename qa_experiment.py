@@ -65,7 +65,8 @@ def load_params(args):
                       'prefix_tuning': args.prefix_tuning, 
                       'prefix_projection': args.prefix_projection, 
                       'prefix_hidden_size': args.prefix_hidden_size,
-                      'hidden_layer_retention_rate': args.hidden_layer_retention_rate}
+                      'hidden_layer_retention_rate': args.hidden_layer_retention_rate,
+                      'visualize': args.mode == 'eval'}
     optimization_params = {'lr': args.learning_rate,
                            'num_epochs': args.n_epochs,
                            'weight_decay': 0.001, 

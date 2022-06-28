@@ -46,6 +46,10 @@ from transformers.utils import (
 )
 from transformers.deepspeed import deepspeed_config, is_deepspeed_zero3_enabled
 from requests import HTTPError
+
+from neural_tree.utils.visual_utils import visualize_graph
+
+
 logger = logging.get_logger(__name__)
 
 
@@ -290,6 +294,10 @@ def get_neural_tree_network(config):
             if not self.need_postmp:  # pre-iteration dropout for citation networks (might not be necessary in some case)
                 x = F.dropout(x, p=self.dropout, training=self.training)
             '''
+            
+            if config.visualize:
+                node_hidden_states = []
+            
             for i in range(int(self.config.num_hidden_layers * self.config.hidden_layer_retention_rate)):
                 attention_mask = attention_mask if i < self.config.first_attn_mask_layers else None
                 
@@ -317,7 +325,21 @@ def get_neural_tree_network(config):
                     x = F.relu(x) if self.conv_block != 'GAT' else F.elu(x)
                     x = F.dropout(x, p=self.dropout, training=self.training)
                 '''
-
+                if config.visualize:
+                    node_hidden_states.append(x.cpu().numpy())
+                    
+            if config.visualize:
+                visualize_graph(model_name=config._name_or_path, 
+                                node_hidden_states=node_hidden_states, 
+                                embeddings=self.embeddings.word_embeddings, 
+                                embedding_projection=self.embedding_hidden_mapping_in,
+                                node_context_mask=data.node_context_mask, 
+                                leaf_mask=data.leaf_mask, 
+                                edge_index=edge_index.cpu().numpy(), 
+                                save_file="test.png")
+                      
+                    
+            
             #x = self.roberta.pooler(x)
             x = x[:,0]
             
