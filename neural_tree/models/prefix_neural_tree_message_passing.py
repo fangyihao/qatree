@@ -297,6 +297,7 @@ def get_neural_tree_network(config):
             
             if config.visualize:
                 node_hidden_states = []
+                node_hidden_states.append(x.cpu().numpy())
             
             for i in range(int(self.config.num_hidden_layers * self.config.hidden_layer_retention_rate)):
                 attention_mask = attention_mask if i < self.config.first_attn_mask_layers else None
@@ -327,16 +328,20 @@ def get_neural_tree_network(config):
                 '''
                 if config.visualize:
                     node_hidden_states.append(x.cpu().numpy())
+            
+            
                     
             if config.visualize:
                 visualize_graph(model_name=config._name_or_path, 
                                 node_hidden_states=node_hidden_states, 
                                 embeddings=self.embeddings.word_embeddings, 
                                 embedding_projection=self.embedding_hidden_mapping_in,
-                                node_context_mask=data.node_context_mask, 
-                                leaf_mask=data.leaf_mask, 
-                                edge_index=edge_index.cpu().numpy(), 
-                                save_file="test.png")
+                                node_context_mask=data.node_context_mask.bool().cpu().numpy(), 
+                                leaf_mask=data.leaf_mask.cpu().numpy(), 
+                                nc_mask=nc_mask.long().cpu().numpy(),
+                                batch_mask=batch.long().cpu().numpy(),
+                                edge_index=edge_index.cpu().numpy(),
+                                qid=data.qid)
                       
                     
             
@@ -349,6 +354,8 @@ def get_neural_tree_network(config):
                 pool_mask = data.node_context_mask.bool()
             elif self.config.graph_pooling == "all":
                 pool_mask = torch.ones(x.size(0)).bool()
+            elif self.config.graph_pooling == "root":
+                pool_mask = (nc_mask != torch.cat((nc_mask[-1:], nc_mask[:-1]),dim=0))
             else:
                 raise RuntimeError("Not implemented")
             x = pyg_nn.global_mean_pool(x[pool_mask, :], batch[pool_mask]*num_choices + nc_mask[pool_mask])

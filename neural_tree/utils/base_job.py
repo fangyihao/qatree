@@ -196,7 +196,7 @@ class BaseJob:
             #config.num_choices = self.__training_params['dataset_params']['num_choices']
             config.hidden_layer_retention_rate = self.__training_params['network_params']['hidden_layer_retention_rate']
             config.first_attn_mask_layers = int(config.num_hidden_layers * config.hidden_layer_retention_rate)
-            config.graph_pooling = "context"
+            config.graph_pooling = self.__training_params['network_params']['graph_pooling'] # context
             config.visualize = self.__training_params['network_params']['visualize']
             config.aggr = "cat" # "cat" or "mean"
             print(config)

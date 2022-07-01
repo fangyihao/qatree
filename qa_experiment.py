@@ -66,7 +66,9 @@ def load_params(args):
                       'prefix_projection': args.prefix_projection, 
                       'prefix_hidden_size': args.prefix_hidden_size,
                       'hidden_layer_retention_rate': args.hidden_layer_retention_rate,
-                      'visualize': args.mode == 'eval'}
+                      #'visualize': args.mode == 'eval',
+                      'visualize': False,
+                      'graph_pooling': args.graph_pooling}
     optimization_params = {'lr': args.learning_rate,
                            'num_epochs': args.n_epochs,
                            'weight_decay': 0.001, 
@@ -289,6 +291,7 @@ if __name__ == '__main__':
     parser.add_argument("--prefix_hidden_size", default=256, type=int, help="The hidden size of the MLP projection head in Prefix Encoder if prefix projection is used")
     parser.add_argument("--hidden_dropout_prob", default=0.1, type=float, help="The dropout probability used in the models")
     parser.add_argument("-hlrr", "--hidden_layer_retention_rate", default=1.0, type=float, help="The retention ratio of pretrained layers")
+    parser.add_argument("--graph_pooling", default="context", type=str, help="Graph pooling (leaf, context, root, or all) at the last layer")
 
 
     args = parser.parse_args()
