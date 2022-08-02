@@ -1,1 +1,0 @@
-from .load_Stanford3d_object_room_dataset import StanfordDataset

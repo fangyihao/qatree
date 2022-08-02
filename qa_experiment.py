@@ -3,7 +3,7 @@ This script computes results for the scene graph experiments using the Neural Tr
 vanilla architectures (message passing on original graphs).
 The dataset split is generated randomly for each run with fixed random seed.
 """
-from neural_tree.utils.base_job import BaseJob, print_log
+from util.base_job import BaseJob, print_log
 from statistics import mean, stdev
 from os import mkdir, path
 import random
@@ -11,9 +11,9 @@ from datetime import datetime
 import torch
 import numpy as np
 import argparse
-from neural_tree.utils import data_utils
-from neural_tree.utils import utils
-from neural_tree.utils import parser_utils
+from util import data_util
+from util import util
+from util import parser_util
 import os
 DECODER_DEFAULT_LR = {
     'csqa': 1e-5,
@@ -45,7 +45,7 @@ def load_data(args, devices, kg):
     #########################################################
     # Construct the dataset
     #########################################################
-    dataset = data_utils.DataLoader(args.train_statements, args.train_adj,
+    dataset = data_util.DataLoader(args.train_statements, args.train_adj,
         args.dev_statements, args.dev_adj,
         args.test_statements, args.test_adj,
         device=devices,
@@ -100,7 +100,7 @@ def load_cache(args):
     if args.dataset == "medqa_usmle":
         kg = "ddb"
         
-    graph_file = "{}_graph_{}_n{}_sl{}_tw{}{}.pt".format(args.dataset, args.encoder, args.max_node_num, args.max_seq_len, args.tree_width, '_inhouse' if args.inhouse else '')
+    graph_file = "{}_graph_{}_n{}_sl{}_tw{}{}.pt".format(args.dataset, args.encoder.replace('/','-'), args.max_node_num, args.max_seq_len, args.tree_width, '_inhouse' if args.inhouse else '')
     graph_path = "data/{}".format(graph_file)
     if os.path.isfile('{}.zip'.format(graph_path)):
         os.system('unzip {}.zip -d data'.format(graph_path))
@@ -152,11 +152,11 @@ def train(args):
 
     # setup log folder, parameter and accuracy files
     curr_dt = datetime.now()
-    log_folder = log_folder_master + curr_dt.strftime('/%Y%m%d-%H%M%S') + '_' + args.dataset + '_' + args.encoder
+    log_folder = log_folder_master + curr_dt.strftime('/%Y%m%d-%H%M%S') + '_' + args.dataset + '_' + args.encoder.replace('/','-')
     os.system('mkdir -p ' + log_folder)
     
     if args.save_dir is None:
-        args.save_dir = save_folder_master + '/' + args.dataset + '/' + curr_dt.strftime('/%Y%m%d-%H%M%S') + '_' + args.dataset + '_' + args.encoder
+        args.save_dir = save_folder_master + '/' + args.dataset + '/' + curr_dt.strftime('/%Y%m%d-%H%M%S') + '_' + args.dataset + '_' + args.encoder.replace('/','-')
         os.system('mkdir -p ' + args.save_dir)
     
     
@@ -231,18 +231,18 @@ def evaluate(args):
 if __name__ == '__main__':
     __spec__ = None
 
-    parser = parser_utils.get_parser()
+    parser = parser_util.get_parser()
     args, _ = parser.parse_known_args()
 
     # General
     parser.add_argument('--mode', default='train', choices=['train', 'eval'], help='run training or evaluation')
     parser.add_argument('--save_dir', default=None, help='model output directory')
-    parser.add_argument('--save_model', default=True, type=utils.bool_flag, help="Whether to save model checkpoints or not.")
+    parser.add_argument('--save_model', default=True, type=util.bool_flag, help="Whether to save model checkpoints or not.")
     parser.add_argument('--load_model_path', default=None, help="The model checkpoint to load in the evaluation mode.")
     parser.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS, help='show this help message and exit')
     parser.add_argument("--resume_checkpoint", default=None, type=str,
                         help="The checkpoint to resume training from.")
-    parser.add_argument('--use_wandb', default=False, type=utils.bool_flag, help="Whether to use wandb or not.")
+    parser.add_argument('--use_wandb', default=False, type=util.bool_flag, help="Whether to use wandb or not.")
     parser.add_argument("--resume_id", default=None, type=str, help="The wandb run id to resume if `resume_checkpoint` is not None or 'None'.")
 
     # Data
@@ -254,11 +254,11 @@ if __name__ == '__main__':
     parser.add_argument('--n_train', default=-1, type=int, help="Number of training examples to use. Setting it to -1 means using the `subsample` argument to determine the training set size instead; otherwise it will override the `subsample` argument.")
     #parser.add_argument('--num_choices', default=5, type=int, help="Number of choices")
     parser.add_argument('--tree_width', default=1, type=int, help="Tree width")
-    parser.add_argument("--cxt_node_connects_all", default=False, type=utils.bool_flag, help="Whether to connect the interaction node to all the retrieved KG nodes or only the linked nodes.")
+    parser.add_argument("--cxt_node_connects_all", default=False, type=util.bool_flag, help="Whether to connect the interaction node to all the retrieved KG nodes or only the linked nodes.")
 
     # Model architecture
-    parser.add_argument('--freeze_ent_emb', default=True, type=utils.bool_flag, nargs='?', const=True, help='Whether to freeze the entity embedding layer.')
-    parser.add_argument('--random_ent_emb', default=False, type=utils.bool_flag, nargs='?', const=True, help='Whether to use randomly initialized learnable entity embeddings or not.')
+    parser.add_argument('--freeze_ent_emb', default=True, type=util.bool_flag, nargs='?', const=True, help='Whether to freeze the entity embedding layer.')
+    parser.add_argument('--random_ent_emb', default=False, type=util.bool_flag, nargs='?', const=True, help='Whether to use randomly initialized learnable entity embeddings or not.')
     
     parser.add_argument('--n_ntype', default=4, type=int, help='number of node types')
     parser.add_argument('--n_etype', default=38, type=int, help='number of edge types')
