@@ -25,125 +25,13 @@ from model.prefix_encoder import PrefixEncoder
 from typing import Optional
 from transformers.models.deberta_v2.modeling_deberta_v2 import build_relative_position
 from mpu.transformer import ParallelTransformerLayer
-'''
-class SAGEFormer(MessagePassing):
-    r"""The GraphSAGE operator from the `"Inductive Representation Learning on
-    Large Graphs" <https://arxiv.org/abs/1706.02216>`_ paper
-
-    .. math::
-        \mathbf{x}^{\prime}_i = \mathbf{W}_1 \mathbf{x}_i + \mathbf{W}_2 \cdot
-        \mathrm{mean}_{j \in \mathcal{N(i)}} \mathbf{x}_j
-
-    Args:
-        in_channels (int or tuple): Size of each input sample, or :obj:`-1` to
-            derive the size from the first input(s) to the forward method.
-            A tuple corresponds to the sizes of source and target
-            dimensionalities.
-        out_channels (int): Size of each output sample.
-        normalize (bool, optional): If set to :obj:`True`, output features
-            will be :math:`\ell_2`-normalized, *i.e.*,
-            :math:`\frac{\mathbf{x}^{\prime}_i}
-            {\| \mathbf{x}^{\prime}_i \|_2}`.
-            (default: :obj:`False`)
-        root_weight (bool, optional): If set to :obj:`False`, the layer will
-            not add transformed root node features to the output.
-            (default: :obj:`True`)
-        bias (bool, optional): If set to :obj:`False`, the layer will not learn
-            an additive bias. (default: :obj:`True`)
-        **kwargs (optional): Additional arguments of
-            :class:`torch_geometric.nn.conv.MessagePassing`.
-
-    Shapes:
-        - **inputs:**
-          node features :math:`(|\mathcal{V}|, F_{in})` or
-          :math:`((|\mathcal{V_s}|, F_{s}), (|\mathcal{V_t}|, F_{t}))`
-          if bipartite,
-          edge indices :math:`(2, |\mathcal{E}|)`
-        - **outputs:** node features :math:`(|\mathcal{V}|, F_{out})` or
-          :math:`(|\mathcal{V_t}|, F_{out})` if bipartite
-    """
-    def __init__(self, in_channels: Union[int, Tuple[int, int]],
-                 out_channels: int, normalize: bool = False,
-                 root_weight: bool = True, bias: bool = True, **kwargs):
-        kwargs.setdefault('aggr', 'mean')
-        super().__init__(**kwargs)
-
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.normalize = normalize
-        self.root_weight = root_weight
-
-        if isinstance(in_channels, int):
-            in_channels = (in_channels, in_channels)
-
-        self.lin_l = Linear(in_channels[0], out_channels, bias=bias)
-        if self.root_weight:
-            self.lin_r = Linear(in_channels[1], out_channels, bias=False)
-
-        self.seq_len = 2
-        config = AutoConfig.from_pretrained(
-                'roberta-base',
-                revision='main',
-                hidden_size=self.out_channels // self.seq_len,
-                num_attention_heads = 4,
-                attention_probs_dropout_prob = 0.5,
-                intermediate_size = 16,
-            )
-        print(config)
-        self.former_l = nn.ModuleList([RobertaLayer(config) for _ in range(1)])
-        self.former_r = nn.ModuleList([RobertaLayer(config) for _ in range(1)])
-
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        self.lin_l.reset_parameters()
-        if self.root_weight:
-            self.lin_r.reset_parameters()
-
-    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj,
-                size: Size = None) -> Tensor:
-        """"""
-        def former_forward(hidden_states, former_layers):
-            for i, layer_module in enumerate(former_layers):
-                layer_outputs = layer_module(
-                        hidden_states,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                    )
-                hidden_states = layer_outputs[0]
-            return hidden_states
-        
-        
-        if isinstance(x, Tensor):
-            x: OptPairTensor = (x, x)
-
-        # propagate_type: (x: OptPairTensor)
-        out = self.propagate(edge_index, x=x, size=size)
-        out = former_forward(self.lin_l(out).view(-1, self.seq_len, self.out_channels // self.seq_len), self.former_l).view(-1, self.out_channels)
-
-        x_r = x[1]
-        if self.root_weight and x_r is not None:
-            #out += self.lin_r(x_r)
-            out += former_forward(self.lin_r(x_r).view(-1, self.seq_len, self.out_channels // self.seq_len), self.former_r).view(-1, self.out_channels)
-
-        if self.normalize:
-            out = F.normalize(out, p=2., dim=-1)
-
-        return out
-
-    def message(self, x_j: Tensor) -> Tensor:
-        return x_j
-
-    def message_and_aggregate(self, adj_t: SparseTensor,
-                              x: OptPairTensor) -> Tensor:
-        adj_t = adj_t.set_value(None, layout=None)
-        return matmul(adj_t, x[0], reduce=self.aggr)
-
-'''
+import numpy as np
+import torch.utils.checkpoint
+import itertools
+import torch_geometric.utils as pyg_utils
+from torch_geometric.data import Data
+import networkx as nx
+import random
 
 class SAGEFormer2D(MessagePassing):
     
@@ -153,6 +41,7 @@ class SAGEFormer2D(MessagePassing):
         super().__init__(**kwargs)
         
         self.config = config
+        
         
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         
@@ -218,6 +107,49 @@ class SAGEFormer2D(MessagePassing):
                 q, hidden_states.size(-2), bucket_size=self.position_buckets, max_position=self.max_relative_positions
             )
         return relative_pos
+    
+    def random_walk(self, edge_index: Adj, edge_weight: Tensor, context_index, sample_rate):
+        
+        device = edge_index.device
+        
+        data = Data(edge_index = edge_index, edge_weight = edge_weight)
+        G = pyg_utils.to_networkx(data, edge_attrs=["edge_weight"])
+        G = nx.to_undirected(G)
+        G = nx.Graph(G)
+
+        #num_nodes = len(G.nodes())
+        #all_nodes = set(G.nodes())
+        edges_wo_context_self_loops = list(set(G.edges())- set(zip(context_index.cpu().numpy(), context_index.cpu().numpy())))
+
+        num_edges_wo_context_self_loops = len(edges_wo_context_self_loops)
+        #choices = list(itertools.combinations(range(len(edges_wo_context_self_loops)), int(num_edges_wo_context_self_loops * sample_rate)))
+        #selected_edge_indexes = list(choices[random.randint(0, len(choices)-1)])
+        
+        #selected_edge_indexes = random.sample(range(num_edges_wo_context_self_loops), int(num_edges_wo_context_self_loops * sample_rate))
+
+        #removed_edge_indexes = set(range(num_edges_wo_context_self_loops)) - set(selected_edge_indexes)
+
+        removed_edge_indexes = random.sample(range(num_edges_wo_context_self_loops), round(num_edges_wo_context_self_loops * (1-sample_rate)))
+
+        for index in removed_edge_indexes:
+            edge = edges_wo_context_self_loops[index]
+            G.remove_edge(*edge)
+
+        selected_nodes = [] 
+        removed_nodes = []   
+        for node in sorted(list(G.nodes())):
+            if G.degree(node) == 0:
+                removed_nodes.append(node)
+            else:
+                selected_nodes.append(node)
+        
+        
+        data = pyg_utils.from_networkx(G)
+
+        
+        return data.edge_index.to(device), data.edge_weight.to(device), selected_nodes, removed_nodes
+        
+
 
     def forward(self, x: Tensor, attention_mask: Tensor, edge_index: Adj, edge_weight: Tensor, size: Size = None, **kwargs) -> Tensor:
 
@@ -230,6 +162,17 @@ class SAGEFormer2D(MessagePassing):
         
         batch_size, input_seq_len, input_n_embd = x.size()
         
+        if self.config.random_walk:
+            #print("edge_index before:", edge_index)
+            #print("edge_weight before:", edge_weight)
+            edge_index, edge_weight, selected_nodes, removed_nodes = self.random_walk(edge_index, edge_weight, kwargs["context_index"], kwargs["random_walk_sample_rate"])
+            removed_node_embs = x[removed_nodes]
+            
+            #print("selected_nodes:", selected_nodes)
+            #print("removed_nodes:", removed_nodes)
+            #print("edge_index after:", edge_index)
+            #print("edge_weight after:", edge_weight)
+            
         
         out = self.propagate(edge_index, x=x.view(batch_size, -1), edge_weight=edge_weight, size=size)
         #self.encoder.embeddings.to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
@@ -237,7 +180,8 @@ class SAGEFormer2D(MessagePassing):
         
         #print("out.size():", out.size())
 
-        out = out.view(batch_size, -1, input_n_embd)
+        out = out.view(out.size(0), -1, input_n_embd)
+        concated_seq_len = out.size(1)
         
         # setup attention_mask
         if attention_mask is not None:
@@ -264,7 +208,18 @@ class SAGEFormer2D(MessagePassing):
         # print("out.size():", out.size())
         
         if self.config.name_or_path.startswith("albert"):
-            out = self.layer_module(out, attention_mask = attention_mask)[0]
+            if self.config.gradient_checkpointing and self.training:
+                def create_custom_forward(module):
+                    def custom_forward(*inputs):
+                        return module(*inputs)
+
+                    return custom_forward
+
+                out = torch.utils.checkpoint.checkpoint(
+                    create_custom_forward(self.layer_module),
+                    out, attention_mask)[0]
+            else:   
+                out = self.layer_module(out, attention_mask = attention_mask)[0]
         elif "deberta" in self.config.name_or_path:
             self.relative_attention = kwargs["relative_attention"]
             self.position_buckets = kwargs["position_buckets"]
@@ -276,6 +231,16 @@ class SAGEFormer2D(MessagePassing):
             out = self.layer_module(out, attention_mask = attention_mask, relative_pos=relative_pos, rel_embeddings=kwargs["rel_embeddings"])
         else:
             out = self.layer_module(out, attention_mask = attention_mask, past_key_value=past_key_value)[0]
+        
+        
+        if self.config.random_walk:
+            removed_node_embs = F.pad(removed_node_embs, (0,0,0,concated_seq_len - input_seq_len), "constant", 0.0)
+            #print("removed_node_embs:", removed_node_embs)
+            out = torch.cat([out, removed_node_embs], dim=0)
+            out= out[torch.argsort(torch.tensor(selected_nodes + removed_nodes))]
+
+            #print("selected_nodes + removed_nodes:", selected_nodes + removed_nodes)
+            #print("torch.argsort(torch.tensor(selected_nodes + removed_nodes)):", torch.argsort(torch.tensor(selected_nodes + removed_nodes)))
         
 
         if self.normalize:
@@ -304,15 +269,15 @@ class SAGEFormer2D(MessagePassing):
         specified in :meth:`__init__` by the :obj:`aggr` argument.
         """
         '''
-        print(['*']*80)
+        print('*'*80)
         print("ptr:", ptr)
         print("inputs.size():", inputs.size())
         print("index:", index.cpu().numpy())
         print("node_dim:", self.node_dim)
         print("dim_size:", dim_size)
         print("self.aggr:", self.aggr)
-        print(['*']*80)
         print("pad_value:", pad_value)
+        print('*'*80)
         '''
         
         if self.config.aggr == "cat":
@@ -321,14 +286,18 @@ class SAGEFormer2D(MessagePassing):
             
             #seq_len = inputs.size(-1)//self.config.hidden_size
             x = []
+            
             for i in range(dim_size):
                 x_i = inputs[index == i]
-                x_i = x_i.view(x_i.size(0), self.config.seq_len, -1)
-                edge_weight_i = edge_weight[index == i]
-                
-                x_i = [x_i_k[:,:(x_i_k.size(1)*edge_weight_i[k]).long()] for k, x_i_k in enumerate(x_i.split(1))]
-                x_i = torch.cat(x_i, dim = 1)
-                x.append(x_i)
+                if len(x_i)>0:
+                    x_i = x_i.view(x_i.size(0), self.config.seq_len, -1)
+                    edge_weight_i = edge_weight[index == i]
+                    
+                    x_i = [x_i_k[0] for x_i_k in 
+                           sorted([(x_i_k[:,:(x_i_k.size(1)*edge_weight_i[k]).long()], edge_weight_i[k]) 
+                                   for k, x_i_k in enumerate(x_i.split(1))], key=lambda x_i_k: x_i_k[1], reverse=True)]
+                    x_i = torch.cat(x_i, dim = 1)
+                    x.append(x_i)
             max_seq_len = max([x_i.size(1) for x_i in x])
             
             x = [F.pad(x_i, (0,0,0,max_seq_len - x_i.size(1)), "constant", pad_value) for x_i in x]

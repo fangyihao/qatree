@@ -20,7 +20,9 @@ except:
 from util import concept_net
 from util import util
 from torch import nn
-
+import networkx as nx
+from torch_geometric.utils.convert import from_networkx
+from torch_geometric.data import Data
 MODEL_CLASS_TO_NAME = {
     'gpt': list(OPENAI_GPT_PRETRAINED_CONFIG_ARCHIVE_MAP.keys()),
     'bert': list(BERT_PRETRAINED_CONFIG_ARCHIVE_MAP.keys()),
@@ -60,121 +62,60 @@ MODEL_NAME_TO_CLASS[model_name] = 'glm'
 GPT_SPECIAL_TOKENS = ['_start_', '_delimiter_', '_classify_']
 
 
-class MultiGPUSparseAdjDataBatchGenerator(object):
+
+class DataGenerator(object):
     """A data generator that batches the data and moves them to the corresponding devices."""
-    def __init__(self, device0, device1, batch_size, indexes, qids, labels,
-                 tensors0=[], lists0=[], tensors1=[], lists1=[], adj_data=None):
-        self.device0 = device0
-        self.device1 = device1
-        self.batch_size = batch_size
+    def __init__(self, indexes, qids, labels,
+                 node_data=[], adj_data=None):
+
         self.indexes = indexes
         self.qids = qids
         self.labels = labels
-        self.tensors0 = tensors0
-        self.lists0 = lists0
-        self.tensors1 = tensors1
-        self.lists1 = lists1
-        self.adj_data = adj_data
-
-    def __len__(self):
-        return (self.indexes.size(0) - 1) // self.batch_size + 1
-
-    def __iter__(self):
-        bs = self.batch_size
-        n = self.indexes.size(0)
-        for a in range(0, n, bs):
-            b = min(n, a + bs)
-            batch_indexes = self.indexes[a:b]
-            batch_qids = [self.qids[idx] for idx in batch_indexes]
-            batch_labels = self._to_device(self.labels[batch_indexes], self.device1)
-            batch_tensors0 = [self._to_device(x[batch_indexes], self.device1) for x in self.tensors0]
-            batch_tensors1 = [self._to_device(x[batch_indexes], self.device1) for x in self.tensors1]
-            batch_tensors1[0] = batch_tensors1[0].to(self.device0)
-            batch_lists0 = [self._to_device([x[i] for i in batch_indexes], self.device0) for x in self.lists0]
-            batch_lists1 = [self._to_device([x[i] for i in batch_indexes], self.device1) for x in self.lists1]
-
-            edge_index_all, edge_type_all = self.adj_data
-            #edge_index_all: nested list of shape (n_samples, num_choice), where each entry is tensor[2, E]
-            #edge_type_all:  nested list of shape (n_samples, num_choice), where each entry is tensor[E, ]
-            edge_index = self._to_device([edge_index_all[i] for i in batch_indexes], self.device1)
-            edge_type  = self._to_device([edge_type_all[i] for i in batch_indexes], self.device1)
-
-            yield tuple([batch_qids, batch_labels, *batch_tensors0, *batch_lists0, *batch_tensors1, *batch_lists1, edge_index, edge_type])
-
-    def _to_device(self, obj, device):
-        if isinstance(obj, (tuple, list)):
-            return [self._to_device(item, device) for item in obj]
-        else:
-            return obj.to(device)
-        
-
-class MultiGPUSparseAdjDataBatchGenerator2(object):
-    """A data generator that batches the data and moves them to the corresponding devices."""
-    def __init__(self, device0, device1, indexes, qids, labels,
-                 tensors0=[], lists0=[], tensors1=[], lists1=[], adj_data=None):
-        self.device0 = device0
-        self.device1 = device1
-        self.indexes = indexes
-        self.qids = qids
-        self.labels = labels
-        self.tensors0 = tensors0
-        self.lists0 = lists0
-        self.tensors1 = tensors1
-        self.lists1 = lists1
+        self.node_data = node_data
         self.adj_data = adj_data
 
     def __len__(self):
         return self.indexes.size(0)
 
     def __iter__(self):
-        num_choices = self.tensors0[0][0].size(0)
-        print("MultiGPUSparseAdjDataBatchGenerator2::num_choices:", num_choices)
+
         n = self.indexes.size(0)
         for a in range(n):
-            
-            batch_index = self.indexes[a]
-            batch_qid = self.qids[batch_index]
-            batch_label = self._to_device(self.labels[batch_index], self.device1)
-            batch_graph = []
-            for choice_index in range(num_choices):
+            index = self.indexes[a]
+            qid = self.qids[index]
+            label = self.labels[index]
 
-                batch_tensors0 = [self._to_device(x[batch_index][choice_index], self.device1) for x in self.tensors0]
-                batch_tensors1 = [self._to_device(x[batch_index][choice_index], self.device1) for x in self.tensors1]
-                
-                batch_lists0 = [self._to_device(x[batch_index][choice_index], self.device0) for x in self.lists0]
-                batch_lists1 = [self._to_device(x[batch_index][choice_index], self.device1) for x in self.lists1]
-    
-                edge_index_all, edge_type_all = self.adj_data
-                #edge_index_all: nested list of shape (n_samples, num_choice), where each entry is tensor[2, E]
-                #edge_type_all:  nested list of shape (n_samples, num_choice), where each entry is tensor[E, ]
-                edge_index = self._to_device(edge_index_all[batch_index][choice_index], self.device1)
-                edge_type  = self._to_device(edge_type_all[batch_index][choice_index], self.device1)
-                
-                batch_graph.append(tuple([*batch_tensors0, *batch_lists0, *batch_tensors1, *batch_lists1, edge_index, edge_type]))
-    
-                #yield tuple([batch_qid, batch_label, *batch_tensors0, *batch_lists0, *batch_tensors1, *batch_lists1, edge_index, edge_type])
+            node_data = [x[index] for x in self.node_data]
 
-            yield tuple([batch_qid, batch_label, batch_graph])
+            edge_index_all, edge_type_all = self.adj_data
+            #edge_index_all: nested list of shape (n_samples,), where each entry is tensor[2, E]
+            #edge_type_all:  nested list of shape (n_samples,), where each entry is tensor[E, ]
+            edge_index = edge_index_all[index]
+            if len(edge_type_all) > 0:
+                edge_type = edge_type_all[index]
+            else:
+                edge_type = None
+
             
-    def _to_device(self, obj, device):
-        return obj
-        '''
-        if isinstance(obj, (tuple, list)):
-            return [self._to_device(item, device) for item in obj]
-        else:
-            return obj.to(device)
-        '''
+            node_input_ids, node_attention_mask, node_token_type_ids, node_output_mask, node_context_mask, node_type_ids, node_scores = node_data
+            
+            data = Data(qid=qid, y=label, x = node_input_ids, edge_index = edge_index, 
+                        node_type = node_type_ids, edge_type = edge_type, node_attention_mask = node_attention_mask, node_token_type_ids = node_token_type_ids, node_output_mask = node_output_mask,  node_scores = node_scores, node_context_mask=node_context_mask, num_nodes=node_input_ids.size(0))
+
+
+            yield data
+
 
 class DataLoader(object):
 
     def __init__(self, train_statement_path, train_adj_path,
                  dev_statement_path, dev_adj_path,
                  test_statement_path, test_adj_path,
-                 device, model_name, max_node_num=200, max_seq_length=128,
+                 model_name, max_node_num=200, max_seq_length=128,
                  is_inhouse=False, inhouse_train_qids_path=None,
                  subsample=1.0, n_train=-1, debug=False, cxt_node_connects_all=False, kg="cpnet"):
         super().__init__()
-        self.device0, self.device1 = device
+        #self.device0, self.device1 = device
         self.is_inhouse = is_inhouse
         self.debug = debug
         self.model_name = model_name
@@ -186,12 +127,12 @@ class DataLoader(object):
         self.load_resources(kg)
 
         # Load training data
-        print ('train_statement_path', train_statement_path)
+        print ('train_statement_path:', train_statement_path)
         self.train_qids, self.train_labels, self.train_encoder_data, train_concepts_by_sents_list = self.load_input_tensors(train_statement_path, max_seq_length)
 
         num_choice = self.train_encoder_data[0].size(1)
         self.num_choice = num_choice
-        print ('num_choice', num_choice)
+        print ('num_choice:', num_choice)
         *self.train_decoder_data, self.train_adj_data = self.load_sparse_adj_data_with_contextnode(train_adj_path, max_node_num, train_concepts_by_sents_list)
         if not debug:
             assert all(len(self.train_qids) == len(self.train_adj_data[0]) == x.size(0) for x in [self.train_labels] + self.train_encoder_data + self.train_decoder_data)
@@ -236,10 +177,11 @@ class DataLoader(object):
                 self.train_labels = self.train_labels[:n_train]
                 self.train_encoder_data = [x[:n_train] for x in self.train_encoder_data]
                 self.train_decoder_data = [x[:n_train] for x in self.train_decoder_data]
-                self.train_adj_data = self.train_adj_data[:n_train]
-                assert all(len(self.train_qids) == len(self.train_adj_data[0]) == x.size(0) for x in [self.train_labels] + self.train_encoder_data + self.train_decoder_data)
+                #self.train_adj_data = self.train_adj_data[:n_train]
+                assert all(len(self.train_qids) == x.size(0) for x in [self.train_labels] + self.train_encoder_data + self.train_decoder_data)
+                #assert all(len(self.train_qids) == len(self.train_adj_data[0]) == x.size(0) for x in [self.train_labels] + self.train_encoder_data + self.train_decoder_data)
             assert self.train_size() == n_train
-
+        print("train_size:", self.train_size())
         self.merge_graph(max_seq_length)
         print("Finish merging graph.")
 
@@ -263,17 +205,17 @@ class DataLoader(object):
             train_indexes = self.inhouse_train_indexes[torch.randperm(n_train)]
         else:
             train_indexes = torch.randperm(len(self.train_qids))
-        return MultiGPUSparseAdjDataBatchGenerator2(self.device0, self.device1, train_indexes, self.train_qids, self.train_labels, tensors0=self.train_node_data, tensors1=self.train_decoder_data[1:], adj_data=self.train_adj_data)
+        return DataGenerator(train_indexes, self.train_qids, self.train_labels, node_data=self.train_node_data, adj_data=self.train_adj_data)
 
     def train_eval(self):
-        return MultiGPUSparseAdjDataBatchGenerator2(self.device0, self.device1, torch.arange(len(self.train_qids)), self.train_qids, self.train_labels, tensors0=self.train_node_data, tensors1=self.train_decoder_data[1:], adj_data=self.train_adj_data)
+        return DataGenerator(torch.arange(len(self.train_qids)), self.train_qids, self.train_labels, node_data=self.train_node_data, adj_data=self.train_adj_data)
 
     def dev(self):
         if self.debug:
             dev_indexes = torch.arange(self.debug_sample_size)
         else:
             dev_indexes = torch.arange(len(self.dev_qids))
-        return MultiGPUSparseAdjDataBatchGenerator2(self.device0, self.device1, dev_indexes, self.dev_qids, self.dev_labels, tensors0=self.dev_node_data, tensors1=self.dev_decoder_data[1:], adj_data=self.dev_adj_data)
+        return DataGenerator(dev_indexes, self.dev_qids, self.dev_labels, node_data=self.dev_node_data, adj_data=self.dev_adj_data)
 
     def test(self):
         if self.debug:
@@ -283,9 +225,9 @@ class DataLoader(object):
         else:
             test_indexes = torch.arange(len(self.test_qids))
         if self.is_inhouse:
-            return MultiGPUSparseAdjDataBatchGenerator2(self.device0, self.device1, test_indexes, self.train_qids, self.train_labels, tensors0=self.train_node_data, tensors1=self.train_decoder_data[1:], adj_data=self.train_adj_data)
+            return DataGenerator(test_indexes, self.train_qids, self.train_labels, node_data=self.train_node_data, adj_data=self.train_adj_data)
         else:
-            return MultiGPUSparseAdjDataBatchGenerator2(self.device0, self.device1, test_indexes, self.test_qids, self.test_labels, tensors0=self.test_node_data, tensors1=self.test_decoder_data[1:], adj_data=self.test_adj_data)
+            return DataGenerator(test_indexes, self.test_qids, self.test_labels, node_data=self.test_node_data, adj_data=self.test_adj_data)
 
     def load_resources(self, kg):
         # Load the tokenizer
@@ -520,14 +462,91 @@ class DataLoader(object):
         #self.train_decoder_data, self.train_adj_data
         #concept_ids, node_type_ids, node_scores, adj_lengths, special_nodes_mask = self.train_decoder_data
         
-        self.train_node_data = _merge_graph(self.train_encoder_data, self.train_decoder_data[0], self.id2concept, self.tokenizer, max_seq_length)
-        self.dev_node_data = _merge_graph(self.dev_encoder_data, self.dev_decoder_data[0], self.id2concept, self.tokenizer, max_seq_length)
-        self.test_node_data = _merge_graph(self.test_encoder_data, self.test_decoder_data[0], self.id2concept, self.tokenizer, max_seq_length)
+        self.train_node_data, self.train_adj_data = _merge_graph(self.train_encoder_data, self.train_decoder_data, self.train_adj_data, self.id2concept, self.tokenizer, max_seq_length, self.max_node_num)
+        self.dev_node_data, self.dev_adj_data = _merge_graph(self.dev_encoder_data, self.dev_decoder_data, self.dev_adj_data, self.id2concept, self.tokenizer, max_seq_length, self.max_node_num)
+        self.test_node_data, self.test_adj_data = _merge_graph(self.test_encoder_data, self.test_decoder_data, self.test_adj_data, self.id2concept, self.tokenizer, max_seq_length, self.max_node_num)
 
 
-def _merge_graph(context_node_data, concept_ids, id2concept, tokenizer, max_seq_length):     
+def _merge_graph(context_node_data, kg_data, adj, id2concept, tokenizer, max_seq_length, max_node_num):     
     # concept_ids: (n_questions, num_choice, max_node_num)
     # context_node_input_ids, context_node_input_mask, context_node_segment_ids, context_node_output_mask = context_node_data
+
+    concept_ids, node_type_ids, node_scores, adj_lengths, special_nodes_mask = kg_data
+
+    # merge graphs of choices to a united one (there is a graph per choice originally)
+
+    merged_edge_index = []
+    merged_edge_type = []
+    merged_concept_ids = []
+    merged_node_type_ids = []
+    merged_node_scores = []
+    num_choices = concept_ids[0].size(0)
+    #print("concept_ids:",len(concept_ids))
+    #print("adj:",len(list(zip(adj[0], adj[1]))))
+    for concept_ids_per_qid, node_type_ids_per_qid, node_scores_per_qid, adj_lengths_per_qid, adj_per_qid in zip(concept_ids, node_type_ids, node_scores, adj_lengths, zip(adj[0], adj[1])):
+        G=nx.Graph()
+        #print("concept_ids_per_qid:",len(concept_ids_per_qid))
+        #print("adj_per_qid:",len(list(zip(adj_per_qid[0], adj_per_qid[1]))))
+        for choice_id, (concept_ids_per_choice, node_type_ids_per_choice, node_scores_per_choice, adj_length, adj_per_choice) in enumerate(zip(concept_ids_per_qid, node_type_ids_per_qid, node_scores_per_qid, adj_lengths_per_qid, zip(adj_per_qid[0], adj_per_qid[1]))):
+            #print("node_scores_per_choice:", node_scores_per_choice[:adj_length])
+            H=nx.Graph()
+            #concept_ids_per_choice = [concept_id + choice_id if concept_id == 0 else concept_id + (num_choices-1) for concept_id in concept_ids_per_choice]
+            concept_ids_per_choice = [concept_id + choice_id if concept_id == 0 else (concept_id + (num_choices-1)) + choice_id*(len(id2concept)+num_choices) for concept_id in concept_ids_per_choice]
+            for concept_id, type_id, score in zip(concept_ids_per_choice[:adj_length],node_type_ids_per_choice[:adj_length], node_scores_per_choice[:adj_length]):
+                H.add_node(concept_id.item(), concept_id=concept_id, type_id=type_id, score=score)
+            for edge_index, edge_type in zip(zip(adj_per_choice[0][0], adj_per_choice[0][1]), adj_per_choice[1]):
+                H.add_edge(concept_ids_per_choice[edge_index[0]].item(), concept_ids_per_choice[edge_index[1]].item(), edge_type = edge_type) 
+            #print("G.nodes:", G.nodes(data=True))
+            #print("G.edges:", G.edges(data=True))
+            #print("H.nodes:", H.nodes(data=True))
+            #print("H.edges:", H.edges(data=True))
+            G = nx.compose(G,H)  
+            #print("composed G.nodes:", G.nodes(data=True))
+            #print("composed G.edges:", G.edges(data=True))
+        
+        U = nx.Graph()
+        U.add_nodes_from(sorted(G.nodes(data=True)))
+        U.add_edges_from(G.edges(data=True)) 
+        
+        '''
+        # remove low score nodes
+        low_score_nodes = sorted(list(U.nodes(data=True))[num_choices:], key=lambda node: node[1]["score"], reverse=True)[max_node_num-num_choices:]
+        low_score_nodes = [node[0] for node in low_score_nodes]
+        #print("low_score_nodes:",low_score_nodes)
+    
+        #print("nodes before:", U.nodes())
+        #print("edges before:", U.edges())
+        for node in low_score_nodes:
+            if U.degree(node) > 1:
+                N = list(U.neighbors(node))
+                #patch_edges = set(itertools.combinations(N,2)) - set(U.edges())
+                #patch_edges = set(zip(N, N[1:]+N[0:1])) - set(U.edges())
+                N_wo_context = list(set(N) - set(range(num_choices)))
+                if len(N_wo_context) > 0:
+                    pivot = sorted([(n,U.nodes(data=True)[n]["score"]) for n in N_wo_context], key=lambda t: t[1], reverse=True)[0][0]
+                    patch_edges = set(zip([pivot] * (len(N)-1), list(set(N) - set([pivot])))) - set(U.edges())
+                    for edge in patch_edges:
+                        U.add_edge(*edge, edge_type = U[node][edge[1]]["edge_type"])
+            U.remove_node(node)     
+        #print("nodes after:", U.nodes())
+        #print("edges after:", U.edges())
+        '''
+         
+        pyg_graph = from_networkx(U) 
+        print("pyg_graph:", pyg_graph)
+        #print("pyg_graph.concept_id:", pyg_graph.concept_id)
+        #print("pyg_graph.edge_index:", pyg_graph.edge_index)
+        try:
+            merged_edge_index.append(pyg_graph.edge_index)
+        except AttributeError:
+            print ("AttributeError: 'GlobalStorage' object has no attribute 'edge_index'")
+        try:
+            merged_edge_type.append(pyg_graph.edge_type)
+        except AttributeError:
+            print ("AttributeError: 'GlobalStorage' object has no attribute 'edge_type'")    
+        merged_concept_ids.append(pyg_graph.concept_id)
+        merged_node_type_ids.append(pyg_graph.type_id)
+        merged_node_scores.append(pyg_graph.score)
     
     id2encoded = {"input_ids":[], "input_mask":[],"segment_ids":[],"output_mask":[]}
 
@@ -540,12 +559,23 @@ def _merge_graph(context_node_data, concept_ids, id2concept, tokenizer, max_seq_
         id2encoded["segment_ids"].append(encoded_input["token_type_ids"])
         id2encoded["output_mask"].append(encoded_input["special_tokens_mask"])
 
-    node_data = []
-    for i, key in enumerate(id2encoded):
+    merged_node_data = []
+    for attr_index, key in enumerate(id2encoded):
         id2encoded_emb = nn.Embedding.from_pretrained(torch.FloatTensor(id2encoded[key]))
-        kg_node_encoded = id2encoded_emb((concept_ids - 1)[:,:,1:])
-        node_data.append(torch.concat([torch.unsqueeze(context_node_data[i], dim=2),kg_node_encoded], dim=2).long())
-    return node_data
+        kg_node_data = []
+        for kg_index, kg_concept_ids in enumerate(merged_concept_ids):
+            kg_node_encoded = id2encoded_emb((kg_concept_ids % (len(id2concept)+num_choices) - num_choices)[num_choices:])
+            kg_node_data.append(torch.concat([context_node_data[attr_index][kg_index],kg_node_encoded], dim=0).long())
+        merged_node_data.append(kg_node_data)
+    
+    node_context_mask = []
+    for input_ids in merged_node_data[0]:
+        node_context_mask_per_graph = torch.zeros(input_ids.size(0), dtype=torch.long) - 1
+        for i in range(num_choices):
+            node_context_mask_per_graph[i] = i
+        node_context_mask.append(node_context_mask_per_graph)
+    
+    return (*merged_node_data,node_context_mask, merged_node_type_ids, merged_node_scores), (merged_edge_index, merged_edge_type)
         
 
 def load_gpt_input_tensors(statement_jsonl_path, max_seq_length):

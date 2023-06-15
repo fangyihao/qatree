@@ -48,7 +48,7 @@ from transformers.utils import (
 from transformers.deepspeed import deepspeed_config, is_deepspeed_zero3_enabled
 from requests import HTTPError
 
-from util.visual_util import visualize_graph
+from util.visual_util import animate_graph
 
 from torch.nn import LayerNorm
 from mpu import VocabParallelEmbeddings
@@ -56,6 +56,12 @@ from mpu import VocabParallelEmbeddings
 from mpu.util import divide
 from mpu.transformer import PositionalEmbeddings
 from mpu.initialize import get_model_parallel_world_size
+
+import torch_geometric.utils as pyg_utils
+from torch_geometric.data import Data
+import networkx as nx
+from torch_geometric.utils import degree
+from torch import Tensor
 logger = logging.get_logger(__name__)
 
 
@@ -78,7 +84,7 @@ def get_qa_tree_network(config):
     #class PrefixNeuralTreeNetwork(BertPreTrainedModel):
         #_keys_to_ignore_on_load_missing = [r"position_ids"]
         
-        def __init__(self, config, task='node', non_prefix_requires_grad = False):
+        def __init__(self, config, non_prefix_requires_grad = False):
             """
             NeuralTreeNetwork is the child class of BasicNetwork, which implements basic message passing on graphs.
             The network parameters and loss functions are the same as the parent class. The difference is that this class
@@ -178,20 +184,16 @@ def get_qa_tree_network(config):
             self.classifier = torch.nn.Linear(config.hidden_size, 1)
             
             
-
+            
             if self.config.prefix_tuning == True:
                 for param in self.embeddings.parameters():
                     param.requires_grad = non_prefix_requires_grad
+            '''
+            for param in self.embeddings.parameters():
+                param.requires_grad = False
+            '''
+
             
-
-            self.task = task
-
-    
-            if not (self.task == 'node' or self.task == 'graph'):
-                raise RuntimeError('Unknown task.')
-            #elif self.task == 'graph':
-            #    raise RuntimeError('Graph classification not implemented -- work in progress.')
-    
             # message passing
             self.convs = nn.ModuleList()
             if config.name_or_path.startswith("albert"):
@@ -210,61 +212,178 @@ def get_qa_tree_network(config):
 
             self.init_weights()
 
-            #self.num_choices = config.num_choices
-        '''    
-        def test_forward(self, data):
-            x, token_type_ids, attention_mask, output_mask, edge_index, batch, nc_mask = data.x, data.node_token_type_ids, data.node_attention_mask, data.node_output_mask, data.edge_index, data.batch, data.nc_mask
+        
+        def unbatch_edge(self, edge_index: Tensor, edge_weight: Tensor, batch: Tensor):
+            r"""
+            Args:
+                batch (LongTensor): The batch vector
+                    :math:`\mathbf{b} \in {\{ 0, \ldots, B-1\}}^N`, which assigns each
+                    node to a specific example. Must be ordered.
+        
+            :rtype: :class:`List[Tensor]`
+            """
+            deg = degree(batch, dtype=torch.int64)
+            ptr = torch.cat([deg.new_zeros(1), deg.cumsum(dim=0)[:-1]], dim=0)
+        
+            edge_batch = batch[edge_index[0]]
             
+            #print("edge_batch:", edge_batch)
             
-            #print("x:", list(x.cpu().numpy()))
-            #print("edge_index:", list(edge_index.cpu().numpy()))
-            #print("data.leaf_mask:", list(data.leaf_mask.cpu().numpy()))
-            #print("batch*self.num_choices + nc_mask:", list((batch*self.num_choices + nc_mask).cpu().numpy()))
-            #print("data.node_context_mask:", list(data.node_context_mask.bool().cpu().numpy()))
+            edge_index = edge_index - ptr[edge_batch]
             
-            x = x[data.node_context_mask.bool()].long()
-            token_type_ids = token_type_ids[data.node_context_mask.bool()].long()
-            attention_mask = attention_mask[data.node_context_mask.bool()].long()
-            output_mask = output_mask[data.node_context_mask.bool()].long()
+            num_batches = torch.max(batch)+1
             
+            edge_batch_l = []
+            edge_weight_l = []
+            for i in range(num_batches):
+                edge_batch_i_mask = (edge_batch == i)
+                edge_batch_l.append(edge_index[:, edge_batch_i_mask])
+                edge_weight_l.append(edge_weight[edge_batch_i_mask])
             
-            #print("attention_mask:", list(attention_mask.cpu().numpy()))
-            #print("token_type_ids:", list(token_type_ids.cpu().numpy()))
-            #print("output_mask:", list(output_mask.cpu().numpy()))
+            return edge_batch_l, edge_weight_l
+        
+        def augment_graph(self, x, attention_mask, edge_index, edge_weight, node_context_mask, leaf_mask, y, batch):
+            device = x.device
             
+            x_l_1 = pyg_utils.unbatch(x, batch)
+            attention_mask_l_1 = pyg_utils.unbatch(attention_mask, batch)
+            edge_index_l_1, edge_weight_l_1 = self.unbatch_edge(edge_index, edge_weight, batch)
+            #edge_weight_l_1 = edge_weight.split([ei.size(1) for ei in edge_index_l_1])
+            #print("edge_index_l_1:", edge_index_l_1)
+            #print("edge_weight_l_1:", edge_weight_l_1)
             
-            #tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
+            node_context_mask_l_1 = pyg_utils.unbatch(node_context_mask, batch)
+            leaf_mask_l_1 = pyg_utils.unbatch(leaf_mask, batch)
+            y_l_1 = y.split(1)
             
-            #for sent in x: 
-            #    sent = tokenizer.decode(sent, skip_special_tokens=True)
-            #    print("sent:", sent)
+            x_l_2=[]
+            attention_mask_l_2=[]
+            edge_index_l_2=[]
+            edge_weight_l_2=[]
+            node_context_mask_l_2=[]
+            leaf_mask_l_2=[]
+            y_l_2=[]
+            context_index_l_2=[]
+            ground_true_mask_l_2=[]
+            positive_mask_l_2=[]
+            negative_mask_l_2=[]
+            batch_l_2=[]
+            cum_index = 0
             
-            x = self.roberta(x, token_type_ids=token_type_ids) # attention_mask=attention_mask, 
-            #x = x[1]
-            x = x[0][:,0]
-            x = self.dropout(x)
-            x = self.classifier(x)
-            x = x.view(-1, self.num_choices)
-            #print("x:", x.size())
+            for i, (x, attention_mask, edge_index, edge_weight, node_context_mask, leaf_mask, y) in enumerate(zip(x_l_1, attention_mask_l_1, edge_index_l_1, edge_weight_l_1, node_context_mask_l_1, leaf_mask_l_1, y_l_1)):
             
-            return x
-        '''
+                x_index = torch.arange(x.size(0)).long()
+                context_index = x_index[(node_context_mask>=0) & leaf_mask]
+            
+                data = Data(edge_index = edge_index, edge_weight = edge_weight)
+                G = pyg_utils.to_networkx(data, edge_attrs=["edge_weight"])
+                G = nx.to_undirected(G)
+                G = nx.Graph(G)
+                
+                context_value = node_context_mask[context_index]
+                mask_value_index = torch.arange(context_value.size(0)).long()
+                ground_true_mask_value_index = mask_value_index[context_value == y]
+                ground_true_context_index = context_index[ground_true_mask_value_index].cpu().numpy()
+                
+                for connected_component in nx.connected_components(G):
+                    if ground_true_context_index[0] in connected_component:
+                        ground_true_subgraph_index = sorted(connected_component)
+                        sub_G = G.subgraph(connected_component)
+                        break
+                
+                not_aug_size = x.size(0)
+                aug_size = len(ground_true_subgraph_index)
+                
+                x = torch.cat([x, x[ground_true_subgraph_index]])
+                attention_mask = torch.cat([attention_mask, attention_mask[ground_true_subgraph_index]])
+                
+                node_context_mask = torch.cat([node_context_mask, node_context_mask[ground_true_subgraph_index]])
+                leaf_mask = torch.cat([leaf_mask, leaf_mask[ground_true_subgraph_index]])
+                
+                x_index = torch.arange(x.size(0)).long()
+                context_index = x_index[(node_context_mask>=0) & leaf_mask]
+                
+                #mapping = dict(zip(sorted(sub_G), range(not_aug_size,len(sub_G)+not_aug_size)))
+                #sub_G = nx.relabel_nodes(sub_G, mapping)
+                sub_G_data = pyg_utils.from_networkx(sub_G)
+                
+                
+                edge_index = torch.cat([edge_index, sub_G_data.edge_index.to(device)+not_aug_size], dim = 1)
+                edge_weight = torch.cat([edge_weight, sub_G_data.edge_weight.to(device)])
+                
+                
+                ground_true_mask = torch.zeros(not_aug_size + aug_size).bool().to(device)
+                ground_true_mask[ground_true_subgraph_index] = True
+                
+                positive_mask = torch.cat([torch.zeros(not_aug_size).bool(), torch.ones(aug_size).bool()]).to(device)
+    
+                negative_mask = torch.cat([torch.ones(not_aug_size).bool(), torch.zeros(aug_size).bool()]).to(device)
+                negative_mask[ground_true_subgraph_index] = False
+                
+                x_l_2.append(x)
+                attention_mask_l_2.append(attention_mask)
+                edge_index_l_2.append(edge_index+cum_index)
+                edge_weight_l_2.append(edge_weight)
+                node_context_mask_l_2.append(node_context_mask)
+                leaf_mask_l_2.append(leaf_mask)
+                y_l_2.append(y)
+                context_index_l_2.append(context_index+cum_index)
+                ground_true_mask_l_2.append(ground_true_mask)
+                positive_mask_l_2.append(positive_mask)
+                negative_mask_l_2.append(negative_mask)
+                batch_l_2.append(torch.ones(x.size(0),dtype=torch.int64).to(device)*i)
+                cum_index += x.size(0)
+                
+            
+            return torch.cat(x_l_2), torch.cat(attention_mask_l_2), torch.cat(edge_index_l_2, dim=1), torch.cat(edge_weight_l_2),\
+                 torch.cat(context_index_l_2), torch.cat(node_context_mask_l_2), torch.cat(leaf_mask_l_2), \
+                 torch.cat(ground_true_mask_l_2), torch.cat(positive_mask_l_2), torch.cat(negative_mask_l_2), torch.cat(batch_l_2)
 
-        
-        def get_rel_embedding(self):
-            rel_embeddings = self.rel_embeddings.weight if self.relative_attention else None
-            if rel_embeddings is not None and ("layer_norm" in self.norm_rel_ebd):
-                rel_embeddings = self.LayerNorm(rel_embeddings)
-            return rel_embeddings
-        
+        def global_mean_pool(self, x, batch, num_choices, choice_mask, pool_mask, squeeze = False):
+            batch = batch[pool_mask]*num_choices+choice_mask[pool_mask].long()
+            if squeeze:
+                while torch.max(batch) >= 0:
+                    temp = batch[batch>=0]
+                    batch[batch>=0] = temp - torch.min(temp)
+                    batch = batch - 1
+                batch = batch - torch.min(batch)    
+            return pyg_nn.global_mean_pool(x[pool_mask, :], batch)
+    
+    
+        def isotropy_loss(self, embeddings):
+            # covariance
+            meanVector = embeddings.mean(dim=0)
+            centereVectors = embeddings - meanVector
+    
+            # estimate covariance matrix
+            featureDim = meanVector.shape[0]
+            dataCount = embeddings.shape[0]
+            covMatrix = ((centereVectors.t())@centereVectors)/(dataCount-1) 
+    
+            # normalize covariance matrix
+            stdVector = torch.std(embeddings, dim=0)
+            sigmaSigmaMatrix = (stdVector.unsqueeze(1))@(stdVector.unsqueeze(0))
+            normalizedConvMatrix = covMatrix/sigmaSigmaMatrix
+    
+            deltaMatrix = normalizedConvMatrix - torch.eye(featureDim).to(self.device)
+    
+            covLoss = torch.norm(deltaMatrix)   # Frobenius norm
+            
+            return covLoss
     
         def forward(self, data):
-            #return self.test_forward(data)
+
             #device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
             
-            x, token_type_ids, attention_mask, edge_index, batch, nc_mask = data.x, data.node_token_type_ids, data.node_attention_mask, data.edge_index, data.batch, data.nc_mask
+            x, token_type_ids, attention_mask, edge_index, batch = data.x, data.node_token_type_ids, data.node_attention_mask, data.edge_index, data.batch
+            node_context_mask, y = data.node_context_mask, data.y
+            if hasattr(data,'leaf_mask'):
+                leaf_mask = data.leaf_mask
+            else:
+                leaf_mask = torch.ones_like(node_context_mask, dtype=bool)
+            #print("qid:", data.qid)
             
-            num_choices = torch.max(nc_mask).long().item() + 1
+            num_choices = torch.max(node_context_mask[leaf_mask]).long().item() + 1
             
             if data.num_node_features == 0:
                 raise RuntimeError('No node feature')
@@ -277,25 +396,24 @@ def get_qa_tree_network(config):
             
             
             # setup input embeddings
-            seq_len = x.size(1)
-            x_all_len = x.size(0)
+            x_all_len, seq_len = x.size()
             
             x_index = torch.arange(x.size(0)).long()
-            leaf_index = x_index[data.leaf_mask]
-            context_index = x_index[data.node_context_mask.bool()]
-            x_index = torch.cat([x_index[data.leaf_mask], x_index[torch.logical_not(data.leaf_mask)]])
+
+            context_index = x_index[(node_context_mask>=0) & leaf_mask]
+            x_index = torch.cat([x_index[leaf_mask], x_index[torch.logical_not(leaf_mask)]])
             x_index = torch.argsort (x_index)
             
             if "deberta" in config.name_or_path:
                 x = self.embeddings(
-                    input_ids=x[data.leaf_mask].long(),
-                    token_type_ids=token_type_ids[data.leaf_mask].long(),
-                    mask=attention_mask[data.leaf_mask].long()
+                    input_ids=x[leaf_mask].long(),
+                    token_type_ids=token_type_ids[leaf_mask].long(),
+                    mask=attention_mask[leaf_mask].long()
                 )
             else:
                 x = self.embeddings(
-                    input_ids=x[data.leaf_mask].long(),
-                    token_type_ids=token_type_ids[data.leaf_mask].long(),
+                    input_ids=x[leaf_mask].long(),
+                    token_type_ids=token_type_ids[leaf_mask].long(),
                     past_key_values_length = past_key_values_length
                 )
                 
@@ -308,7 +426,10 @@ def get_qa_tree_network(config):
                 
                 
             if "deberta" in config.name_or_path:    
-                rel_embeddings = self.get_rel_embedding()
+                rel_embeddings = self.rel_embeddings.weight if self.relative_attention else None
+                if rel_embeddings is not None and ("layer_norm" in self.norm_rel_ebd):
+                    rel_embeddings = self.LayerNorm(rel_embeddings)
+                
 
             
             if config.name_or_path.startswith("glm"):
@@ -333,22 +454,21 @@ def get_qa_tree_network(config):
                 x = self.embedding_dropout(x)  
             
             
+            x_n_embd = x.size(2)
+            
             
             # setup attention mask
-            attention_mask = torch.cat([attention_mask[data.leaf_mask], \
-                    torch.max(attention_mask[data.leaf_mask], dim=0, keepdim=True)[0].expand(x_all_len-x_leaf_len, -1)])[x_index]
+            attention_mask = torch.cat([attention_mask[leaf_mask], \
+                    torch.max(attention_mask[leaf_mask], dim=0, keepdim=True)[0].expand(x_all_len-x_leaf_len, -1)])[x_index]
             
-            #attention_mask = torch.max(attention_mask[data.leaf_mask], dim=0, keepdim=True)[0].expand(x_all_len-x_leaf_len, -1)
+            #attention_mask = torch.max(attention_mask[leaf_mask], dim=0, keepdim=True)[0].expand(x_all_len-x_leaf_len, -1)
             
             #attention_mask = self.get_extended_attention_mask(attention_mask, x.size()[:-1], x.device)
-            
-            #print("x:", [list(x) for x in list(x.cpu().numpy())])
-            
-            
+
             
             # setup edge weight and add self loops
             edge_weight = torch.mul(torch.ones(edge_index.size(1)).to(edge_index.device), 0.2) #0.2
-            edge_index, edge_weight = add_self_loops(edge_index, edge_weight, 1.0) #1.0
+            edge_index, edge_weight = add_self_loops(edge_index, edge_weight, 1.0, x_all_len) #1.0
             
             if self.config.aggr == "cat":
                 non_self_loop_mask = edge_index[0] != edge_index[1]
@@ -366,20 +486,25 @@ def get_qa_tree_network(config):
             context_self_loop_mask = torch.logical_and(equal(edge_index[0], context_index), equal(edge_index[1], context_index))
             edge_weight[context_self_loop_mask] = 2.0 # 2.0
             
-            #print("edge_index:", edge_index.size(), list(edge_index.cpu().numpy()))
-            
-            #print("edge_weight:", edge_weight.size(), list(edge_weight.cpu().numpy()))
-            
-            '''
-            if not self.need_postmp:  # pre-iteration dropout for citation networks (might not be necessary in some case)
-                x = F.dropout(x, p=self.dropout, training=self.training)
-            '''
 
-            
-            
+            if self.config.contrastive_loss and self.training:
+                #print("edge_index before:", edge_index)
+                #print("edge_weight before:", edge_weight)
+                #print("node_context_mask before:", node_context_mask)
+                #print("leaf_mask before:", leaf_mask)
+                #print("context_index before:", context_index)
+                #print("batch before:", batch)
+                x, attention_mask, edge_index, edge_weight, context_index, node_context_mask, leaf_mask, ground_true_mask, positive_mask, negative_mask, batch = self.augment_graph(x, attention_mask, edge_index, edge_weight, node_context_mask, leaf_mask, y, batch)
+                #print("edge_index after:", edge_index)
+                #print("edge_weight after:", edge_weight)
+                #print("node_context_mask after:", node_context_mask)
+                #print("leaf_mask after:", leaf_mask)
+                #print("context_index after:", context_index)
+                #print("batch after:", batch)
+                
             if config.visualize:
                 node_hidden_states = []
-                node_hidden_states.append(x.cpu().numpy())
+                node_hidden_states.append(x.detach().cpu().numpy())
             
             for i in range(int(self.config.num_hidden_layers * self.config.hidden_layer_retention_rate)):
                 attention_mask = attention_mask if i < self.config.first_attn_mask_layers else None
@@ -397,7 +522,7 @@ def get_qa_tree_network(config):
                     idx = 0
                 else:
                     idx = i
-                    
+                
                 if "deberta" in config.name_or_path:
                     #print("x.size():", x.size())
                     x = self.convs[idx](x, attention_mask, 
@@ -405,14 +530,16 @@ def get_qa_tree_network(config):
                                         position_buckets = self.position_buckets, 
                                         max_relative_positions = self.max_relative_positions,
                                         rel_embeddings = rel_embeddings, 
-                                        edge_index = edge_index, edge_weight = edge_weight)
+                                        edge_index = edge_index, edge_weight = edge_weight, context_index = context_index, random_walk_sample_rate = self.config.random_walk_sample_rate)
                 elif config.name_or_path.startswith("glm"):
                     args = [x, attention_mask]
                     if self.relative_encoding:
                         args += [position_embeddings, self.r_w_bias, self.r_r_bias]
-                    x = self.convs[idx](*args, edge_index = edge_index, edge_weight = edge_weight)
+                    x = self.convs[idx](*args, edge_index = edge_index, edge_weight = edge_weight, context_index = context_index, random_walk_sample_rate = self.config.random_walk_sample_rate)
                 else:
-                    x = self.convs[idx](x, attention_mask, edge_index = edge_index, edge_weight = edge_weight)
+                    x = self.convs[idx](x, attention_mask, edge_index = edge_index, edge_weight = edge_weight, context_index = context_index, random_walk_sample_rate = self.config.random_walk_sample_rate)
+                
+                
                 if self.config.aggr == "cat":
                     x = x[:,:seq_len]
                 #print("x:", x.cpu().detach().numpy())
@@ -424,18 +551,17 @@ def get_qa_tree_network(config):
                     x = F.dropout(x, p=self.dropout, training=self.training)
                 '''
                 if config.visualize:
-                    node_hidden_states.append(x.cpu().numpy())
+                    node_hidden_states.append(x.detach().cpu().numpy())
             
             
                     
             if config.visualize:
-                visualize_graph(model_name=config._name_or_path, 
+                animate_graph(model_name=config._name_or_path, 
                                 node_hidden_states=node_hidden_states, 
                                 embeddings=self.embeddings.word_embeddings, 
                                 embedding_projection=self.embedding_hidden_mapping_in,
-                                node_context_mask=data.node_context_mask.bool().cpu().numpy(), 
-                                leaf_mask=data.leaf_mask.cpu().numpy(), 
-                                nc_mask=nc_mask.long().cpu().numpy(),
+                                node_context_mask=node_context_mask.long().cpu().numpy(), 
+                                leaf_mask=leaf_mask.cpu().numpy(), 
                                 batch_mask=batch.long().cpu().numpy(),
                                 edge_index=edge_index.cpu().numpy(),
                                 qid=data.qid)
@@ -447,43 +573,75 @@ def get_qa_tree_network(config):
             #x = self.roberta.pooler(x)
             x = x[:,0]
             
+            
             if self.config.graph_pooling == "leaf":
-                pool_mask = data.leaf_mask
+                pool_mask = leaf_mask
+                raise RuntimeError("Choice mask not implemented")
             elif self.config.graph_pooling == "context":
-                pool_mask = data.node_context_mask.bool()
+                pool_mask = (node_context_mask>=0) & leaf_mask
+                choice_mask = node_context_mask
             elif self.config.graph_pooling == "all":
                 pool_mask = torch.ones(x.size(0)).bool()
-            elif self.config.graph_pooling == "root":
-                pool_mask = (nc_mask != torch.cat((nc_mask[-1:], nc_mask[:-1]),dim=0))
+                raise RuntimeError("Choice mask not implemented")
             else:
                 raise RuntimeError("Not implemented")
-            x = pyg_nn.global_mean_pool(x[pool_mask, :], batch[pool_mask]*num_choices + nc_mask[pool_mask])
             
             
-            x = self.classifier(x)
-            x = x.view(-1, num_choices)
-            
-            #print("x.size():", x.size())
+            if self.config.contrastive_loss and self.training:
+                pool_ground_true_mask = pool_mask & ground_true_mask
+                pool_positive_mask = pool_mask & positive_mask  #augmentation
+                pool_negative_mask = pool_mask & negative_mask
+                
+                ground_true_x = self.global_mean_pool(x, batch, num_choices, choice_mask, pool_ground_true_mask, squeeze=True)
+                positive_x = self.global_mean_pool(x, batch, num_choices, choice_mask, pool_positive_mask, squeeze=True)
+                negative_x = self.global_mean_pool(x, batch, num_choices, choice_mask, pool_negative_mask, squeeze=True).view(-1, num_choices-1, x_n_embd)
+                
+                sim = torch.nn.CosineSimilarity(dim=1)
+                negative_sim = torch.sum(torch.stack([torch.exp(sim(ground_true_x, torch.squeeze(negative_x_per_choice)))
+                                for negative_x_per_choice in negative_x.split(1, dim = 1)] 
+                                                      + [torch.exp(sim(torch.squeeze(negative_x_per_choice), ground_true_x))
+                                                         for negative_x_per_choice in negative_x.split(1, dim = 1)], dim=1), dim=1)
+                positive_sim = torch.exp(sim(ground_true_x, positive_x))
+                
+                contrastive_loss = -torch.mean(torch.log(positive_sim/(positive_sim+negative_sim)))
+                
+                #print("positive_sim:", positive_sim.detach().cpu().numpy())
+                #print("negative_sim:", negative_sim.detach().cpu().numpy())
+                
+                iso_x = self.global_mean_pool(x, batch, num_choices, choice_mask, pool_mask & (~positive_mask))
+                isotropy_loss = self.isotropy_loss(iso_x)
+                
+                
+                
+                ce_x = self.global_mean_pool(x, batch, num_choices, choice_mask, pool_mask & (~positive_mask))
     
-            #if self.need_postmp:
-            #    x = F.relu(x) if self.conv_block != 'GAT' else F.elu(x)
-            #    x = F.dropout(x, p=self.dropout, training=self.training)
-            #    return tuple(self.post_mp[i](x) for i in range(len(self.post_mp)))
-            #else:
-            return x
-        '''
-        def loss(self, pred, label, mask=None):
-            #print("pred.size():", pred.size())
-            #print("label.size():", label.size())
-            #print("label:", label.numpy())
-            if mask is None:
-                loss_fct = CrossEntropyLoss(reduction='mean')
-                return loss_fct(pred, label)
-                #return F.cross_entropy(pred, label)
+                ce_x = self.classifier(ce_x)
+                ce_x = ce_x.view(-1, num_choices)
+                cross_entropy_loss_fct = CrossEntropyLoss(reduction='mean')
+                cross_entropy_loss = cross_entropy_loss_fct(ce_x, y)
+                
+                #print("cross_entropy_loss:", cross_entropy_loss.item())
+                #print("contrastive_loss:", contrastive_loss.item())
+                #print("isotropy_loss:", isotropy_loss.item())
+                #print("self.config.cross_entropy_loss_scalar:", self.config.cross_entropy_loss_scalar)
+                #print("self.config.contrastive_loss_scalar:", self.config.contrastive_loss_scalar)
+                #print("self.config.isotropy_loss_scalar:", self.config.isotropy_loss_scalar)
+                
+                
+                loss = self.config.cross_entropy_loss_scalar * cross_entropy_loss + self.config.contrastive_loss_scalar * contrastive_loss + self.config.isotropy_loss_scalar * isotropy_loss
+                
+                #print("loss:", loss.item())
+                
             else:
-                return sum(F.cross_entropy(pred[i][mask[i], :], label[mask[i]]) for i in range(len(mask))
-                           if mask[i].sum().item() > 0)
-        '''
+                x = self.global_mean_pool(x, batch, num_choices, choice_mask, pool_mask)
+                #x = pyg_nn.global_mean_pool(x[pool_mask, :], batch[pool_mask]*num_choices+node_context_mask[pool_mask].long())
+    
+                x = self.classifier(x)
+                x = x.view(-1, num_choices)
+                cross_entropy_loss_fct = CrossEntropyLoss(reduction='mean')
+                loss = cross_entropy_loss_fct(x, y)
+            return x, loss
+
         @classmethod
         def from_pretrained(cls, pretrained_model_name_or_path: Optional[Union[str, os.PathLike]], *model_args, **kwargs):
             r"""
@@ -671,7 +829,7 @@ def get_qa_tree_network(config):
                 
                 
             if config.name_or_path.startswith("glm"):
-                model = cls(config, kwargs["task"])
+                model = cls(config)
                 # make sure token embedding weights are still tied if needed
                 model.tie_weights()
         

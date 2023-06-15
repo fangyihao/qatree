@@ -9,6 +9,7 @@ import concurrent.futures
 from collections import defaultdict
 from typing import List, Optional, Tuple, Union
 import torch_geometric.data
+import numpy as np
 
 class HTreeDataset:
     """
@@ -155,8 +156,8 @@ def convert_to_networkx_jth(data: Data, task='graph', node_id=None, radius=None,
     if task == 'graph':
         #print("arbitrary element:", nx.utils.arbitrary_element(G))
         #print("connected nodes:", sum(1 for node in nx.node_connected_component(G, nx.utils.arbitrary_element(G))))
-        if nx.is_connected(G) is False:
-            raise RuntimeError('[Input graph] is disconnected.')
+        #if nx.is_connected(G) is False:
+            #raise RuntimeError('[Input graph] is disconnected.')
         if radius is not None:
             G_subgraph = nx.ego_graph(G, node_id, radius=radius, undirected=False)
             G = generate_node_labels(G_subgraph)
@@ -177,7 +178,7 @@ def convert_to_networkx_jth(data: Data, task='graph', node_id=None, radius=None,
     is_clique_graph = True if len(list(G.edges)) == G.number_of_nodes() * (G.number_of_nodes() - 1) / 2 else False
 
     # Create junction tree hierarchy
-    G.graph = {'original': True}
+    
     #zero_feature = [0.0] * data.num_node_features
     
     # TODO:  
@@ -205,11 +206,60 @@ def convert_to_networkx_jth(data: Data, task='graph', node_id=None, radius=None,
     
     need_root_tree = True
     remove_edges_every_layer = True
-    G_sampled, G_jth, root_nodes = sample_and_generate_jth(G, k=treewidth, zero_feature=attr_feature_dict,
+    
+    if nx.is_connected(G) is False:
+        '''
+        plt.figure(figsize=(20,20))
+        nx.draw(G)
+        plt.savefig(data.qid+".png")
+        plt.close()
+        '''
+        G_jth = nx.Graph()
+        root_nodes = []
+        
+        for sub_G in [G.subgraph(c) for c in nx.connected_components(G)]:
+            sub_G.graph = {'original': True}
+            _, sub_G_jth, sub_root_nodes = sample_and_generate_jth(sub_G, k=treewidth, zero_feature=attr_feature_dict,
                                                                copy_node_attributes=node_attrs,
                                                                need_root_tree=need_root_tree,
                                                                remove_edges_every_layer=remove_edges_every_layer,
                                                                verbose=False)
+            if sub_root_nodes is not None:
+                sub_root_nodes = (np.array(sub_root_nodes) + len(G_jth)).tolist()
+                root_nodes.extend(sub_root_nodes)
+            
+            mapping = dict(zip(sub_G_jth, (np.array(sub_G_jth)+len(G_jth)).tolist()))
+            sub_G_jth = nx.relabel_nodes(sub_G_jth, mapping)
+            G_jth = nx.compose(sub_G_jth, G_jth)
+            
+            #print("sub_G_jth.edges:", sub_G_jth.edges(data=True))
+            #print("sub_root_nodes:", sub_root_nodes)
+            
+        #print("G_jth.edges:", G_jth.edges(data=True))
+        #print("root_nodes:",root_nodes)
+        '''
+        plt.figure(figsize=(20,20))
+        nx.draw(G_jth)
+        plt.savefig(data.qid+"_jth.png")
+        plt.close()
+        '''
+        
+    else:
+        G.graph = {'original': True}
+        G_sampled, G_jth, root_nodes = sample_and_generate_jth(G, k=treewidth, zero_feature=attr_feature_dict,
+                                                               copy_node_attributes=node_attrs,
+                                                               need_root_tree=need_root_tree,
+                                                               remove_edges_every_layer=remove_edges_every_layer,
+                                                               verbose=False)
+        
+    
+    for v, attr in G_jth.nodes('type'):
+        if attr == "node":
+            G_jth.nodes[v]['leaf_mask'] = True
+        else:
+            G_jth.nodes[v]['leaf_mask'] = False  
+        #print("G_jth.edges:", G_jth.edges(data=True))
+        #print("root_nodes:",root_nodes)
     '''
     # Convert back to torch Data (change first clique_has value to avoid TypeError when calling pyg_utils.from_networkx
     if is_clique_graph:  # clique graph
@@ -223,9 +273,9 @@ def convert_to_networkx_jth(data: Data, task='graph', node_id=None, radius=None,
     try:
         data_jth['diameter'] = nx.diameter(G_jth)
     except nx.NetworkXError:
-        data_jth['diameter'] = 0
+        data_jth['diameter'] = max([nx.diameter(G_jth.subgraph(c)) for c in nx.connected_components(G_jth)])
         print('junction tree hierarchy disconnected.')
-        return data_jth
+        #return data_jth
 
     if task == 'node':
         data_jth['classification_node'] = classification_node_id
@@ -274,68 +324,67 @@ def convert_knowledge_graph_to_jths(data, min_diameter=None, max_diameter=None, 
     
 
     #print("len(data):", len(data))
-    qid, label, graph = data
-    nc = len(graph)
+    #qid, label, *graph = data
     
-    jths = []
-    for node_input_ids, node_attention_mask, node_token_type_ids, node_output_mask, node_type_ids, node_scores, adj_lengths, special_nodes_mask, edge_index, edge_type in graph:
-        '''
-        print("qid:", qid)
-        print("label:", label.cpu().numpy())
-        print("input_ids:", node_input_ids.size())
-        print("attention_mask:", node_attention_mask.size())
-        print("token_type_ids:", node_token_type_ids.size())
-        print("output_mask:", node_output_mask.size())
-        print("node_type_ids:", node_type_ids.size())
-        print("node_scores:", node_scores.size())
-        print("adj_lengths:", adj_lengths.cpu().numpy())
-        print("special_nodes_mask:", special_nodes_mask.size())
-        print("edge_index:", edge_index.size())
-        print("edge_type:", edge_type.size())
-        '''
-        adj_lengths = adj_lengths.cpu().numpy()
-        
-        node_context_mask = torch.zeros(node_input_ids.size(0), dtype=torch.bool)
-        node_context_mask[0] = True
+    #node_input_ids, node_attention_mask, node_token_type_ids, node_output_mask, node_context_mask, node_type_ids, node_scores, edge_index, edge_type = graph
+    '''
+    print("qid:", qid)
+    print("label:", label.cpu().numpy())
+    print("input_ids:", node_input_ids.size())
+    print("attention_mask:", node_attention_mask.size())
+    print("token_type_ids:", node_token_type_ids.size())
+    print("output_mask:", node_output_mask.size())
+    print("node_type_ids:", node_type_ids.size())
+    print("node_scores:", node_scores.size())
+    print("edge_index:", edge_index.size())
+    print("edge_type:", edge_type.size())
+    print("node_context_mask:", node_context_mask.cpu().numpy())
+    '''
     
-        data = Data(x = node_input_ids[:adj_lengths,:], edge_index = edge_index, 
-             node_type = node_type_ids[:adj_lengths], edge_type = edge_type, node_attention_mask = node_attention_mask[:adj_lengths,:], node_token_type_ids = node_token_type_ids[:adj_lengths,:], node_output_mask = node_output_mask[:adj_lengths,:],  node_scores = node_scores[:adj_lengths,:], node_context_mask=node_context_mask[:adj_lengths])
+    #data = Data(qid=qid, x = node_input_ids, edge_index = edge_index, 
+    #     node_type = node_type_ids, edge_type = edge_type, node_attention_mask = node_attention_mask, node_token_type_ids = node_token_type_ids, node_output_mask = node_output_mask,  node_scores = node_scores, node_context_mask=node_context_mask)
 
-        print("data:", data)
 
-        data_jth, G_jth, root_nodes = convert_to_networkx_jth(data, 'graph', 0, None, node_attrs=["x", "node_type", "node_attention_mask", "node_token_type_ids", "node_output_mask", "node_scores", "node_context_mask"], edge_attrs=["edge_type"], treewidth=treewidth)
+    print("data:", data)
+
+    data_jth, G_jth, root_nodes = convert_to_networkx_jth(data, 'graph', 0, None, node_attrs=["x", "node_type", "node_attention_mask", "node_token_type_ids", "node_output_mask", "node_scores", "node_context_mask"], edge_attrs=["edge_type"], treewidth=treewidth)
+
     
-        
-        # return empty lists if diameter is beyond specified bound
-        try:
-            data_jth['diameter'] = nx.diameter(G_jth)
-        except nx.NetworkXError:
-            data_jth['diameter'] = 0
-            print('junction tree hierarchy disconnected.')
-            return data_jth
-        if (min_diameter is not None and data_jth.diameter < min_diameter) or \
-                (max_diameter is not None and data_jth.diameter > max_diameter):
-            return []
-        
-        data_jth.clique_has = None
-        data_jth.type = None
-        
-        leaf_mask = torch.zeros(data_jth.num_nodes, dtype=torch.bool)
-        for node_id in range(data.num_nodes):
-            for v, attr in G_jth.nodes('type'):
-                if attr == 'node' and G_jth.nodes[v]['clique_has'] == node_id:
-                    leaf_mask[v] = True
-        data_jth['leaf_mask'] = leaf_mask
-        
-        #data_jth['y'] = data.y
-        #data_jth['qid'] = data.qid
-        
-        print("data_jth:", data_jth)
-        
-        #print("data.x:" + str(list(data.x)) + ",data.edge_index:" + str(list(data.edge_index)) + ",data_jth.x:" + str(list(data_jth.x)) + ",data_jth.edge_index:" + str(list(data_jth.edge_index)))
-        
-        jths.append(data_jth)
+    # return empty lists if diameter is beyond specified bound
+    '''
+    try:
+        data_jth['diameter'] = nx.diameter(G_jth)
+    except nx.NetworkXError:
+        data_jth['diameter'] = max([nx.diameter(G_jth.subgraph(c)) for c in nx.connected_components(G_jth)])
+        print('junction tree hierarchy disconnected.')
+    '''
+    if (min_diameter is not None and data_jth.diameter < min_diameter) or \
+            (max_diameter is not None and data_jth.diameter > max_diameter):
+        #return []
+        raise Exception('diameter is beyond specified bound.')
     
+    data_jth.clique_has = None
+    data_jth.type = None
+    
+    '''
+    leaf_mask = torch.zeros(data_jth.num_nodes, dtype=torch.bool)
+    for node_id in range(data.num_nodes):
+        for v, attr in G_jth.nodes('type'):
+            if attr == 'node' and G_jth.nodes[v]['clique_has'] == node_id:
+                leaf_mask[v] = True
+    data_jth['leaf_mask'] = leaf_mask
+    '''
+    data_jth['y'] = data.y
+    data_jth['qid'] = data.qid
+    data_jth['num_nodes'] = data_jth.x.size(0)
+    
+    print("data_jth:", data_jth)
+    
+    return data_jth
+    #print("data.x:" + str(list(data.x)) + ",data.edge_index:" + str(list(data.edge_index)) + ",data_jth.x:" + str(list(data_jth.x)) + ",data_jth.edge_index:" + str(list(data_jth.edge_index)))
+    
+    
+    '''
     item_dict = {}
     for jth in jths:
         for key, value in jth:
@@ -351,10 +400,12 @@ def convert_knowledge_graph_to_jths(data, min_diameter=None, max_diameter=None, 
             item_dict[key] = batch_edge_index(value, n_nodes)
         else:
             item_dict[key] = torch.cat(value)
+    
     merged_data_jth = Data(qid=qid, y=label, nc_mask = nc_mask, **item_dict)
     
     print("merged_data_jth:", merged_data_jth)
     return merged_data_jth
+    '''
 
 def convert_room_object_graph_to_same_jths(data: Data, min_diameter=None, max_diameter=None):
     """
@@ -410,7 +461,7 @@ def convert_room_object_graph_to_same_jths(data: Data, min_diameter=None, max_di
     return train_list, val_list, test_list
 
 
-def convert_dataset_to_junction_tree_hierarchy(dataset, task, min_diameter=None, max_diameter=None, radius=None, treewidth=1):
+def convert_dataset_to_junction_tree_hierarchy(dataset, min_diameter=None, max_diameter=None, radius=None, treewidth=1):
     """
     Convert a torch.dataset object or a list of torch.Data to a junction tree hierarchies.
     :param dataset:     a iterable collection of torch.Data objects
@@ -418,61 +469,32 @@ def convert_dataset_to_junction_tree_hierarchy(dataset, task, min_diameter=None,
     :param min_diameter:    int
     :param max_diameter:    int
     :param radius:          int, maximum radius of extracted sub-graphs for node classification
-    :return: if task = 'graph', return a list of torch.Data objects in the same order as in dataset;
-     else (task = 'node'), return a list of three such lists, for nodes and the corresponding subgraph in train_mask,
-     val_mask, and test_mask respectively.
+    :return: return a list of torch.Data objects in the same order as in dataset
     """
-    if task == 'graph':
 
-        cpu_count = os.cpu_count()
-        if radius is None:  # for nodes in the same graph, use the same junction tree hierarchy
-            rtn_list = []
-            
-            with concurrent.futures.ThreadPoolExecutor(max_workers=cpu_count+4) as executor:
-                for sub_dataset in dataset:
-                    print("dataset size:", len(sub_dataset))
-                    graph_list = list(executor.map(lambda data: convert_knowledge_graph_to_jths(data, min_diameter, max_diameter, treewidth), list(sub_dataset)))
-                    rtn_list.append(graph_list)   
-            '''
-            # Sequential alternative for debug
+    cpu_count = os.cpu_count()
+    if radius is None:  # for nodes in the same graph, use the same junction tree hierarchy
+        rtn_list = []
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=cpu_count+4) as executor:
             for sub_dataset in dataset:
-                graph_list = []
-                for data in list(sub_dataset):
-                    graph = convert_knowledge_graph_to_jths(data, min_diameter, max_diameter)
-                    graph_list.append(graph)
-                rtn_list.append(graph_list)
-            '''
-            return rtn_list
-        else:
-            raise RuntimeError("Not implemented")
-    elif task == 'node':
-        train_list = []
-        val_list = []
-        test_list = []
-        for data in dataset:
-            print(data)
-            if radius is None:  # for nodes in the same graph, use the same junction tree hierarchy
-                train_graphs, val_graphs, test_graphs \
-                    = convert_room_object_graph_to_same_jths(data, min_diameter, max_diameter)
-                train_list += train_graphs
-                val_list += val_graphs
-                test_list += test_graphs
-            else:               # otherwise, create jth for each node separately
-                for i in range(data.num_nodes):
-                    if data.train_mask[i].item() or data.val_mask[i].item() or data.test_mask[i].item():
-                        data_jth = convert_room_object_graph_to_jth(data, node_id=i, radius=radius)
-                        if (min_diameter is None or data_jth.diameter >= min_diameter) and \
-                                (max_diameter is None or data_jth.diameter <= max_diameter):
-                            if data.train_mask[i].item() is True:
-                                train_list.append(data_jth)
-                            elif data.val_mask[i].item() is True:
-                                val_list.append(data_jth)
-                            elif data.test_mask[i].item() is True:
-                                test_list.append(data_jth)
-        return [train_list, val_list, test_list]
+                print("dataset size:", len(sub_dataset))
+                graph_list = list(executor.map(lambda data: convert_knowledge_graph_to_jths(data, min_diameter, max_diameter, treewidth), list(sub_dataset)))
+                rtn_list.append(graph_list)   
+        '''
+        # Sequential alternative for debug
+        for sub_dataset in dataset:
+            graph_list = []
+            for data in list(sub_dataset):
+                graph = convert_knowledge_graph_to_jths(data, min_diameter, max_diameter)
+                graph_list.append(graph)
+            rtn_list.append(graph_list)
+        '''
+        return rtn_list
     else:
-        raise Exception("must specify if task is 'graph' or 'node' classification")
+        raise RuntimeError("Not implemented")
 
+    
 
 def get_subtrees_from_htree(data, G_htree, radius):
     """
