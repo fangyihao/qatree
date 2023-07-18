@@ -90,12 +90,12 @@ def load_data(args):
         [ascii_histogram(counted) for counted in [Counter([data.x.size(0) for data in data_list]) for data_list in dataset]]
     
     
-        if args.visualize:
+        if args.visualize_data:
             for data_list in dataset:
                 for data in data_list: 
                     #if data.qid == 'ec75c93664a43ebbb6392c967182f420' or data.qid == '7cc58103bf167b5c22f7a943616f99ac':
                     draw_graph(args.encoder, data, graph_type="kg",
-                                visualize_context_mask=args.visualize_context_mask)
+                                visualize_context_mask=args.visualize_data_context_mask)
         return dataset
 
     dataset = load_kg_data()
@@ -151,12 +151,12 @@ def load_data(args):
         print("Histogram (number of nodes) of the jth dataset:")
         [ascii_histogram(counted) for counted in [Counter([data.x.size(0) for data in data_list]) for data_list in dataset]]
     
-        if args.visualize:
+        if args.visualize_data:
             for data_list in dataset:
                 for data in data_list: 
                     #if data.qid == 'ec75c93664a43ebbb6392c967182f420' or data.qid == '7cc58103bf167b5c22f7a943616f99ac':
                     draw_graph(args.encoder, data, graph_type="jth",
-                               visualize_context_mask=args.visualize_context_mask)
+                               visualize_context_mask=args.visualize_data_context_mask)
         return dataset
     
     if args.graph_type == "jth":
@@ -174,8 +174,8 @@ def load_params(args):
                       'prefix_projection': args.prefix_projection, 
                       'prefix_hidden_size': args.prefix_hidden_size,
                       'hidden_layer_retention_rate': args.hidden_layer_retention_rate,
-                      'visualize': args.visualize,
-                      'visualize_context_mask': args.visualize_context_mask,
+                      'visualize': args.visualize_model,
+                      #'visualize_context_mask': args.visualize_context_mask,
                       'graph_pooling': args.graph_pooling,
                       'random_walk': args.random_walk,
                       'random_walk_sample_rate': args.random_walk_sample_rate,
@@ -370,8 +370,9 @@ if __name__ == '__main__':
     parser.add_argument("--hidden_dropout_prob", default=0.1, type=float, help="The dropout probability used in the models")
     parser.add_argument("-hlrr", "--hidden_layer_retention_rate", default=1.0, type=float, help="The retention ratio of pretrained layers")
     parser.add_argument("--graph_pooling", default="context", type=str, help="Graph pooling (leaf, context, root, or all) at the last layer")
-    parser.add_argument('--visualize', default=False, type=util.bool_flag, nargs='?', const=True)
-    parser.add_argument('--visualize_context_mask', default=False, type=util.bool_flag, nargs='?', const=True)
+    parser.add_argument('--visualize_data', default=False, type=util.bool_flag, nargs='?', const=True)
+    parser.add_argument('--visualize_data_context_mask', default=False, type=util.bool_flag, nargs='?', const=True)
+    parser.add_argument('--visualize_model', default=False, type=util.bool_flag, nargs='?', const=True)
     parser.add_argument('--random_walk', default=True, type=util.bool_flag, nargs='?', const=True)
     parser.add_argument('--random_walk_sample_rate', default=0.8, type=float)
     parser.add_argument('--contrastive_loss', default=False, type=util.bool_flag, nargs='?', const=True)

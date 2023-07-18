@@ -67,7 +67,7 @@ logger = logging.get_logger(__name__)
 
 
 def get_qa_tree_network(config):
-    if config.name_or_path.startswith("bert"):
+    if config.name_or_path.startswith("bert") or "SapBERT" in config.name_or_path:
         cls = BertPreTrainedModel
     #elif config.name_or_path.startswith("roberta"):
     elif "roberta" in config.name_or_path:
@@ -98,7 +98,7 @@ def get_qa_tree_network(config):
             #self.roberta = RobertaModel(config, add_pooling_layer=False)
             #self.bert = BertModel(config, add_pooling_layer=False)
             
-            if config.name_or_path.startswith("bert"):
+            if config.name_or_path.startswith("bert") or "SapBERT" in config.name_or_path:
                 cls = BertEmbeddings
             #elif config.name_or_path.startswith("roberta"):
             elif "roberta" in config.name_or_path:
@@ -556,7 +556,7 @@ def get_qa_tree_network(config):
             
                     
             if config.visualize:
-                animate_graph(model_name=config._name_or_path, 
+                animate_graph(config = config, 
                                 node_hidden_states=node_hidden_states, 
                                 embeddings=self.embeddings.word_embeddings, 
                                 embedding_projection=self.embedding_hidden_mapping_in,
@@ -1090,6 +1090,9 @@ def get_qa_tree_network(config):
             if config.name_or_path.startswith("bert"):
                 prefix = "bert"
                 layer = "layer"
+            elif "SapBERT" in config.name_or_path:
+                prefix = ""
+                layer = "layer"
             #elif config.name_or_path.startswith("roberta"):
             elif "roberta" in config.name_or_path:
                 prefix = "roberta"
@@ -1108,7 +1111,7 @@ def get_qa_tree_network(config):
             import re
             key_pairs = []
             for key in state_dict:
-                new_key = re.sub(prefix+r".encoder."+layer+r".([0-9]+)", prefix+r".convs.\1.layer_module", key)
+                new_key = re.sub(prefix+ ("." if len(prefix) > 0 else "") + r"encoder."+layer+r".([0-9]+)", prefix + ("." if len(prefix) > 0 else "") + r"convs.\1.layer_module", key)
                 if config.name_or_path.startswith("albert"):
                     new_key = re.sub("albert.encoder.embedding_hidden_mapping_in", "albert.embedding_hidden_mapping_in", new_key)
                 elif "deberta" in config.name_or_path:

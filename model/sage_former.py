@@ -45,7 +45,7 @@ class SAGEFormer2D(MessagePassing):
         
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         
-        if config.name_or_path.startswith("bert"):
+        if config.name_or_path.startswith("bert") or "SapBERT" in config.name_or_path:
             cls = BertLayer
         #elif config.name_or_path.startswith("roberta"):
         elif "roberta" in config.name_or_path:
